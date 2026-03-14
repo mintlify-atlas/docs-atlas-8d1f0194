@@ -1,0 +1,942 @@
+---
+title: 'Expressions'
+description: 'Expression AST nodes and type evaluation in Yoyo'
+icon: 'code'
+---
+
+## Overview
+
+Expressions in Yoyo represent computations that produce values. The expression system is designed around a visitor pattern using `std::variant`, enabling type-safe AST traversal and evaluation.
+
+## Expression Base Class
+
+```cpp
+namespace Yoyo {
+    class YOYO_API Expression : public ASTNode {
+    public:
+        virtual ~Expression() = default;
+        virtual ExpressionVariant toVariant() = 0;
+        Type evaluated_type;
+        
+        static auto attachSLAndParent(
+            std::unique_ptr<Expression> self,
+            SourceLocation bg,
+            SourceLocation end,
+            ASTNode* parent = nullptr
+        ) -> std::unique_ptr<Expression>;
+    };
+}
+```
+
+<ParamField path="evaluated_type" type="Type">
+  The type of this expression as determined by the type checker. Initially unset, filled during type checking.
+</ParamField>
+
+<ResponseField name="toVariant" type="virtual ExpressionVariant">
+  Converts the expression to its variant representation for visitor pattern traversal.
+</ResponseField>
+
+<ResponseField name="attachSLAndParent" type="static std::unique_ptr<Expression>">
+  Utility method to attach source location and parent AST node information to an expression.
+  
+  ```cpp
+  auto expr = Expression::attachSLAndParent(
+      std::make_unique<IntegerLiteral>("42"),
+      begin_loc,
+      end_loc,
+      parent_node
+  );
+  ```
+</ResponseField>
+
+## ExpressionVariant
+
+```cpp
+using ExpressionVariant = std::variant<
+    IntegerLiteral*,
+    BooleanLiteral*,
+    TupleLiteral*,
+    ArrayLiteral*,
+    RealLiteral*,
+    StringLiteral*,
+    NameExpression*,
+    PrefixOperation*,
+    BinaryOperation*,
+    GroupingExpression*,
+    LogicalOperation*,
+    PostfixOperation*,
+    CallOperation*,
+    SubscriptOperation*,
+    LambdaExpression*,
+    ScopeOperation*,
+    ObjectLiteral*,
+    NullLiteral*,
+    CharLiteral*,
+    GenericNameExpression*,
+    GCNewExpression*,
+    AsExpression*,
+    MacroInvocation*,
+    SpawnExpression*,
+    TryExpression*,
+    BlockExpression*,
+    IfExpression*,
+    ConditionalExtraction*
+>;
+```
+
+## Literal Expressions
+
+### IntegerLiteral
+
+```cpp
+class YOYO_API IntegerLiteral : public Expression {
+public:
+    std::string text;
+    explicit IntegerLiteral(std::string tk);
+    explicit IntegerLiteral(const std::string_view tk);
+};
+```
+
+<ParamField path="text" type="std::string">
+  The textual representation of the integer (e.g., `"42"`, `"0xFF"`, `"0b1010"`).
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+auto int_lit = std::make_unique<IntegerLiteral>("1234");
+// Type checker will infer type based on value and context
+```
+</CodeGroup>
+
+### BooleanLiteral
+
+```cpp
+class YOYO_API BooleanLiteral : public Expression {
+public:
+    Token token;
+    explicit BooleanLiteral(const Token& tk);
+};
+```
+
+<ParamField path="token" type="Token">
+  The token containing `true` or `false`.
+</ParamField>
+
+### RealLiteral
+
+```cpp
+class YOYO_API RealLiteral : public Expression {
+public:
+    Token token;
+    explicit RealLiteral(const Token& tk);
+};
+```
+
+Represents floating-point literals. Type checker will infer `f32` or `f64` based on context.
+
+### StringLiteral
+
+```cpp
+class YOYO_API StringLiteral : public Expression {
+public:
+    std::vector<std::variant<std::string, std::unique_ptr<Expression>>> literal;
+    explicit StringLiteral(decltype(literal) value);
+};
+```
+
+<ParamField path="literal" type="std::vector<std::variant<std::string, std::unique_ptr<Expression>>>">
+  Vector of string segments and interpolated expressions. Supports string interpolation:
+  
+  ```yoyo
+  "Hello, {name}!"  // Has two string parts and one expression
+  ```
+</ParamField>
+
+### CharLiteral
+
+```cpp
+class YOYO_API CharLiteral : public Expression {
+public:
+    uint32_t value;
+};
+```
+
+<ParamField path="value" type="uint32_t">
+  Unicode code point value of the character.
+</ParamField>
+
+### NullLiteral
+
+```cpp
+class YOYO_API NullLiteral : public Expression {};
+```
+
+Represents the `null` value for optional and nullable types.
+
+## Compound Literals
+
+### TupleLiteral
+
+```cpp
+class YOYO_API TupleLiteral : public Expression {
+public:
+    std::vector<std::unique_ptr<Expression>> elements;
+    explicit TupleLiteral(std::vector<std::unique_ptr<Expression>> elems);
+};
+```
+
+<ParamField path="elements" type="std::vector<std::unique_ptr<Expression>>">
+  Ordered list of tuple elements.
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+// Represents: (42, "hello", true)
+std::vector<std::unique_ptr<Expression>> elems;
+elems.push_back(std::make_unique<IntegerLiteral>("42"));
+elems.push_back(std::make_unique<StringLiteral>(/* ... */));
+elems.push_back(std::make_unique<BooleanLiteral>(/* ... */));
+
+auto tuple = std::make_unique<TupleLiteral>(std::move(elems));
+// evaluated_type will be __tup with 3 subtypes
+```
+</CodeGroup>
+
+### ArrayLiteral
+
+```cpp
+class YOYO_API ArrayLiteral : public Expression {
+public:
+    std::variant<
+        std::vector<std::unique_ptr<Expression>>,
+        std::pair<std::unique_ptr<Expression>, std::unique_ptr<Expression>>
+    > elements;
+    
+    explicit ArrayLiteral(std::vector<std::unique_ptr<Expression>> elems);
+    explicit ArrayLiteral(
+        std::pair<std::unique_ptr<Expression>, std::unique_ptr<Expression>> elems
+    );
+};
+```
+
+<ParamField path="elements" type="variant">
+  Either:
+  - **Vector**: List of array elements `[1, 2, 3, 4]`
+  - **Pair**: Repeat syntax `[value; count]` for `[value, value, ..., value]`
+</ParamField>
+
+<CodeGroup>
+```cpp Example: List Syntax
+std::vector<std::unique_ptr<Expression>> elems;
+elems.push_back(std::make_unique<IntegerLiteral>("1"));
+elems.push_back(std::make_unique<IntegerLiteral>("2"));
+elems.push_back(std::make_unique<IntegerLiteral>("3"));
+
+auto array = std::make_unique<ArrayLiteral>(std::move(elems));
+// Represents: [1, 2, 3]
+```
+
+```cpp Example: Repeat Syntax
+auto value = std::make_unique<IntegerLiteral>("0");
+auto count = std::make_unique<IntegerLiteral>("10");
+
+auto array = std::make_unique<ArrayLiteral>(
+    std::make_pair(std::move(value), std::move(count))
+);
+// Represents: [0; 10] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+</CodeGroup>
+
+### ObjectLiteral
+
+```cpp
+class YOYO_API ObjectLiteral : public Expression {
+public:
+    Type t;
+    std::unordered_map<std::string, std::unique_ptr<Expression>> values;
+    
+    ObjectLiteral(Type t, 
+                  std::unordered_map<std::string, std::unique_ptr<Expression>> values);
+};
+```
+
+<ParamField path="t" type="Type">
+  The type of object being constructed (struct or class).
+</ParamField>
+
+<ParamField path="values" type="std::unordered_map<std::string, std::unique_ptr<Expression>>">
+  Map of field names to their initialization expressions.
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+// Represents: Point { x: 10, y: 20 }
+Type point_type{"Point"};
+
+std::unordered_map<std::string, std::unique_ptr<Expression>> fields;
+fields["x"] = std::make_unique<IntegerLiteral>("10");
+fields["y"] = std::make_unique<IntegerLiteral>("20");
+
+auto obj = std::make_unique<ObjectLiteral>(point_type, std::move(fields));
+```
+</CodeGroup>
+
+## Name Expressions
+
+### NameExpression
+
+```cpp
+class YOYO_API NameExpression : public Expression {
+public:
+    std::string text;
+    explicit NameExpression(std::string tk);
+};
+```
+
+<ParamField path="text" type="std::string">
+  The identifier name. Type checker resolves to variable, function, or constant.
+</ParamField>
+
+### GenericNameExpression
+
+```cpp
+class YOYO_API GenericNameExpression : public NameExpression {
+public:
+    std::vector<Type> arguments;
+    
+    GenericNameExpression(std::string name, std::vector<Type> arguments);
+};
+```
+
+<ParamField path="arguments" type="std::vector<Type>">
+  Type arguments for generic instantiation.
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+// Represents: Vec<i32>
+std::vector<Type> args = {Type{"i32"}};
+auto generic = std::make_unique<GenericNameExpression>("Vec", args);
+```
+</CodeGroup>
+
+## Operations
+
+### PrefixOperation
+
+```cpp
+class YOYO_API PrefixOperation : public Expression {
+public:
+    Token op;
+    std::unique_ptr<Expression> operand;
+    
+    PrefixOperation(const Token& op, std::unique_ptr<Expression> operand);
+};
+```
+
+<ParamField path="op" type="Token">
+  Operator token (e.g., `-`, `!`, `&`, `&mut`, `*`).
+</ParamField>
+
+<ParamField path="operand" type="std::unique_ptr<Expression>">
+  The expression being operated on.
+</ParamField>
+
+<Note>
+  Common prefix operators:
+  - `-expr` - Unary negation
+  - `!expr` - Logical not
+  - `&expr` - Immutable reference
+  - `&mut expr` - Mutable reference
+  - `*expr` - Dereference
+</Note>
+
+### PostfixOperation
+
+```cpp
+class YOYO_API PostfixOperation : public Expression {
+public:
+    Token op;
+    std::unique_ptr<Expression> operand;
+    
+    PostfixOperation(const Token& op, std::unique_ptr<Expression> operand);
+};
+```
+
+Currently used for member access and other postfix operations.
+
+### BinaryOperation
+
+```cpp
+class YOYO_API BinaryOperation : public Expression {
+public:
+    Token op;
+    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> rhs;
+    
+    // Populated by type checker
+    OverloadDetailsBinary* selected = nullptr;
+    std::vector<Type> subtypes;
+    ModuleBase* module;
+    
+    BinaryOperation(const Token& op,
+                    std::unique_ptr<Expression> left,
+                    std::unique_ptr<Expression> right);
+};
+```
+
+<ParamField path="op" type="Token">
+  Binary operator (`+`, `-`, `*`, `/`, `==`, `<`, `.`, etc.).
+</ParamField>
+
+<ParamField path="selected" type="OverloadDetailsBinary*">
+  Resolved operator overload (for types with custom operators).
+</ParamField>
+
+<ParamField path="subtypes" type="std::vector<Type>">
+  Generic type arguments for the operator overload.
+</ParamField>
+
+### LogicalOperation
+
+```cpp
+class YOYO_API LogicalOperation : public Expression {
+public:
+    Token op;
+    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> rhs;
+    
+    LogicalOperation(const Token& op,
+                     std::unique_ptr<Expression> left,
+                     std::unique_ptr<Expression> right);
+};
+```
+
+Short-circuiting logical operators: `&&` (and), `||` (or).
+
+### GroupingExpression
+
+```cpp
+class YOYO_API GroupingExpression : public Expression {
+public:
+    std::unique_ptr<Expression> expr;
+    explicit GroupingExpression(std::unique_ptr<Expression> expr);
+};
+```
+
+Represents parenthesized expressions: `(expr)`.
+
+## Function Calls and Subscripting
+
+### CallOperation
+
+```cpp
+class YOYO_API CallOperation : public Expression {
+public:
+    std::unique_ptr<Expression> callee;
+    std::vector<std::unique_ptr<Expression>> arguments;
+    
+    CallOperation(std::unique_ptr<Expression> callee,
+                  std::vector<std::unique_ptr<Expression>> args);
+};
+```
+
+<ParamField path="callee" type="std::unique_ptr<Expression>">
+  Expression that evaluates to a callable (function, lambda, or callable object).
+</ParamField>
+
+<ParamField path="arguments" type="std::vector<std::unique_ptr<Expression>>">
+  Argument expressions passed to the function.
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+// Represents: foo(42, "hello")
+auto callee = std::make_unique<NameExpression>("foo");
+
+std::vector<std::unique_ptr<Expression>> args;
+args.push_back(std::make_unique<IntegerLiteral>("42"));
+args.push_back(std::make_unique<StringLiteral>(/* ... */));
+
+auto call = std::make_unique<CallOperation>(std::move(callee), std::move(args));
+```
+</CodeGroup>
+
+### SubscriptOperation
+
+```cpp
+class YOYO_API SubscriptOperation : public Expression {
+public:
+    std::unique_ptr<Expression> object;
+    std::unique_ptr<Expression> index;
+    
+    // Populated by type checker
+    OverloadDetailsBinary* selected = nullptr;
+    std::vector<Type> subtypes;
+    ModuleBase* module;
+    
+    SubscriptOperation(std::unique_ptr<Expression> obj,
+                       std::unique_ptr<Expression> idx);
+};
+```
+
+<ParamField path="object" type="std::unique_ptr<Expression>">
+  Expression being indexed (array, slice, or custom indexable type).
+</ParamField>
+
+<ParamField path="index" type="std::unique_ptr<Expression>">
+  Index expression.
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+// Represents: array[5]
+auto obj = std::make_unique<NameExpression>("array");
+auto idx = std::make_unique<IntegerLiteral>("5");
+
+auto subscript = std::make_unique<SubscriptOperation>(
+    std::move(obj), std::move(idx)
+);
+```
+</CodeGroup>
+
+## Lambda Expressions
+
+### Ownership
+
+```cpp
+enum class Ownership { Owning = 0, NonOwning, NonOwningMut };
+```
+
+Defines how lambda captures acquire their values.
+
+### LambdaExpression
+
+```cpp
+class YOYO_API LambdaExpression : public Expression {
+public:
+    struct Capture {
+        Ownership cp_type;
+        std::string name;
+    };
+    
+    std::vector<Capture> captures;
+    FunctionSignature sig;
+    std::unique_ptr<Statement> body;
+    std::string hash;
+    
+    LambdaExpression(std::vector<Capture> captures,
+                     FunctionSignature sig,
+                     std::unique_ptr<Statement> body);
+};
+```
+
+<ParamField path="captures" type="std::vector<Capture>">
+  List of captured variables with their capture modes:
+  - **Owning**: Move/copy the value
+  - **NonOwning**: Borrow immutably (`&`)
+  - **NonOwningMut**: Borrow mutably (`&mut`)
+</ParamField>
+
+<ParamField path="sig" type="FunctionSignature">
+  Function signature (parameters and return type).
+</ParamField>
+
+<ParamField path="body" type="std::unique_ptr<Statement>">
+  Lambda body (usually a block statement).
+</ParamField>
+
+<ParamField path="hash" type="std::string">
+  Unique hash for this lambda (used for code generation).
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+// Represents: |x: i32, y: i32| -> i32 { x + y }
+FunctionSignature sig;
+sig.returnType = Type{"i32"};
+sig.parameters = {
+    {Type{"i32"}, "x"},
+    {Type{"i32"}, "y"}
+};
+
+auto body = /* create block with x + y */;
+
+auto lambda = std::make_unique<LambdaExpression>(
+    std::vector<LambdaExpression::Capture>{},  // No captures
+    sig,
+    std::move(body)
+);
+```
+</CodeGroup>
+
+## Type Operations
+
+### ScopeOperation
+
+```cpp
+class YOYO_API ScopeOperation : public Expression {
+public:
+    Type type;
+    explicit ScopeOperation(Type tp);
+};
+```
+
+Represents type-level scope access (e.g., `MyType::associated_const`).
+
+### AsExpression
+
+```cpp
+class YOYO_API AsExpression : public Expression {
+public:
+    std::unique_ptr<Expression> expr;
+    Type dest;
+    
+    AsExpression(std::unique_ptr<Expression> expr, Type dest);
+};
+```
+
+<ParamField path="expr" type="std::unique_ptr<Expression>">
+  Expression to cast.
+</ParamField>
+
+<ParamField path="dest" type="Type">
+  Destination type.
+</ParamField>
+
+Used for primitive casts:
+
+```yoyo
+let x: i64 = (42 as i32) as i64;
+```
+
+## Control Flow Expressions
+
+### IfExpression
+
+```cpp
+class YOYO_API IfExpression : public Expression {
+public:
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> then_expr;
+    std::unique_ptr<Expression> else_expr;
+    
+    bool then_transfers_control = true;
+    bool else_transfers_control = true;
+    
+    IfExpression(std::unique_ptr<Expression> cond,
+                 std::unique_ptr<Expression> then_,
+                 std::unique_ptr<Expression> else_);
+};
+```
+
+<ParamField path="condition" type="std::unique_ptr<Expression>">
+  Boolean condition.
+</ParamField>
+
+<ParamField path="then_expr" type="std::unique_ptr<Expression>">
+  Expression evaluated if condition is true.
+</ParamField>
+
+<ParamField path="else_expr" type="std::unique_ptr<Expression>">
+  Expression evaluated if condition is false (required for if-expressions).
+</ParamField>
+
+<ParamField path="then_transfers_control" type="bool">
+  True if the then-branch doesn't return normally (e.g., contains `return`, `break`, `continue`).
+</ParamField>
+
+<ParamField path="else_transfers_control" type="bool">
+  True if the else-branch doesn't return normally.
+</ParamField>
+
+<Note>
+  If one branch transfers control, the other branch's type becomes the result type without requiring type equality.
+</Note>
+
+### BlockExpression
+
+```cpp
+class YOYO_API BlockExpression : public Expression {
+public:
+    std::vector<std::unique_ptr<Statement>> statements;
+    std::unique_ptr<Expression> expr;
+    
+    BlockExpression(std::vector<std::unique_ptr<Statement>> stats,
+                    std::unique_ptr<Expression> ex);
+};
+```
+
+<ParamField path="statements" type="std::vector<std::unique_ptr<Statement>>">
+  Statements executed in sequence.
+</ParamField>
+
+<ParamField path="expr" type="std::unique_ptr<Expression>">
+  Final expression whose value becomes the block's result.
+</ParamField>
+
+<CodeGroup>
+```yoyo Example
+let result = {
+    let x = 10;
+    let y = 20;
+    x + y  // Final expression (no semicolon)
+};
+// result == 30
+```
+</CodeGroup>
+
+### ConditionalExtraction
+
+```cpp
+class YOYO_API ConditionalExtraction : public Expression {
+public:
+    enum CaptureType { Own, Ref, RefMut };
+    
+    std::string captured_name;
+    CaptureType then_capture_tp;
+    CaptureType else_capture_tp;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> body;
+    std::string else_capture;
+    std::unique_ptr<Expression> else_body;
+    bool then_transfers_control = true;
+    bool else_transfers_control = true;
+    
+    ConditionalExtraction(
+        std::string name,
+        CaptureType cap,
+        std::unique_ptr<Expression> cond,
+        std::unique_ptr<Expression> body,
+        std::unique_ptr<Expression> else_,
+        std::string else_name = "",
+        CaptureType else_cap = Own
+    );
+};
+```
+
+Advanced pattern matching and extraction:
+
+```yoyo
+if |value| (opt_value as SomeType) {
+    // value is extracted and bound
+    use(value)
+} else |error| {
+    handle_error(error)
+}
+```
+
+<ParamField path="captured_name" type="std::string">
+  Name of the captured variable in the then-branch.
+</ParamField>
+
+<ParamField path="then_capture_tp" type="CaptureType">
+  How the value is captured: own, borrow, or mutable borrow.
+</ParamField>
+
+<ParamField path="condition" type="std::unique_ptr<Expression>">
+  Expression to extract from (e.g., optional, result, variant).
+</ParamField>
+
+<ParamField path="else_capture" type="std::string">
+  Name for the else-branch capture (for error handling).
+</ParamField>
+
+### TryExpression
+
+```cpp
+class YOYO_API TryExpression : public Expression {
+public:
+    std::unique_ptr<Expression> expression;
+    
+    TryExpression(std::unique_ptr<Expression> e);
+};
+```
+
+Early return operator for `Result` types:
+
+```yoyo
+let value = fallible_operation().try;
+// If error, returns from enclosing function
+// Otherwise, unwraps to success value
+```
+
+## Advanced Expressions
+
+### GCNewExpression
+
+```cpp
+class YOYO_API GCNewExpression : public Expression {
+public:
+    std::unique_ptr<Expression> target_expression;
+    
+    GCNewExpression(std::unique_ptr<Expression> expr);
+};
+```
+
+Allocates an object on the garbage-collected heap:
+
+```yoyo
+let gc_obj = gc_new MyClass { field: 42 };
+```
+
+### SpawnExpression
+
+```cpp
+class YOYO_API SpawnExpression : public Expression {
+public:
+    std::unique_ptr<Expression> call_expr;
+    
+    SpawnExpression(std::unique_ptr<Expression> call_expr);
+};
+```
+
+Spawns asynchronous computation:
+
+```yoyo
+let task = spawn async_function(arg1, arg2);
+```
+
+### MacroInvocation
+
+```cpp
+class YOYO_API MacroInvocation : public Expression {
+public:
+    std::unique_ptr<Expression> macro_name;
+    std::variant<
+        std::unique_ptr<Expression>,
+        std::vector<std::pair<Token, SourceLocation>>
+    > left;
+    std::unique_ptr<Expression> right;
+    std::unique_ptr<Expression> result;
+    
+    MacroInvocation(std::unique_ptr<Expression> name,
+                    std::unique_ptr<Expression> left);
+    MacroInvocation(std::unique_ptr<Expression> name,
+                    std::unique_ptr<Expression> left,
+                    std::unique_ptr<Expression> right);
+};
+```
+
+<ParamField path="macro_name" type="std::unique_ptr<Expression>">
+  Name of the macro being invoked.
+</ParamField>
+
+<ParamField path="left" type="variant">
+  Either a parsed expression or raw token stream for the macro's first argument.
+</ParamField>
+
+<ParamField path="right" type="std::unique_ptr<Expression>">
+  Optional second argument (for binary macros).
+</ParamField>
+
+<ParamField path="result" type="std::unique_ptr<Expression>">
+  The expanded result after macro processing.
+</ParamField>
+
+## Type Checking Integration
+
+All expressions work with the `TypeChecker` visitor:
+
+```cpp
+FunctionType TypeChecker::operator()(IntegerLiteral* lit) const {
+    Type result = state->new_type_var();
+    state->add_constraint(IsIntegerConstraint{result, lit});
+    state->add_constraint(CanStoreIntegerConstraint{
+        result, parse_integer(lit->text), lit
+    });
+    return FunctionType{result};
+}
+
+FunctionType TypeChecker::operator()(BinaryOperation* binop) const {
+    auto left = std::visit(*this, binop->lhs->toVariant());
+    auto right = std::visit(*this, binop->rhs->toVariant());
+    Type result = state->new_type_var();
+    
+    state->add_constraint(BinaryOperableConstraint{
+        left, right, result, binop->op.type, {}, binop
+    });
+    
+    return FunctionType{result};
+}
+```
+
+## Usage Examples
+
+### Building Expressions
+
+```cpp
+// Build: x + y * 2
+auto x = std::make_unique<NameExpression>("x");
+auto y = std::make_unique<NameExpression>("y");
+auto two = std::make_unique<IntegerLiteral>("2");
+
+Token mul_op{TokenType::Star, "*", {}, {}};
+auto mul = std::make_unique<BinaryOperation>(
+    mul_op, std::move(y), std::move(two)
+);
+
+Token add_op{TokenType::Plus, "+", {}, {}};
+auto result = std::make_unique<BinaryOperation>(
+    add_op, std::move(x), std::move(mul)
+);
+```
+
+### Type Checking Expressions
+
+```cpp
+TypeCheckerState state;
+TypeChecker checker{
+    .target = std::nullopt,
+    .irgen = irgen,
+    .state = &state,
+    .in_mutable_ctx = false
+};
+
+// Type check the expression
+FunctionType result_type = std::visit(checker, expr->toVariant());
+
+// Solve constraints
+ConstraintSolver solver{false, irgen, &state, {}};
+for (auto& constraint : state.constraints) {
+    std::visit(solver, constraint);
+}
+
+// Get final type
+expr->evaluated_type = state.best_repr(result_type);
+```
+
+### Walking Expression Trees
+
+```cpp
+class ExpressionPrinter {
+public:
+    void operator()(IntegerLiteral* lit) {
+        std::cout << lit->text;
+    }
+    
+    void operator()(BinaryOperation* binop) {
+        std::cout << "(";
+        std::visit(*this, binop->lhs->toVariant());
+        std::cout << " " << binop->op.lexeme << " ";
+        std::visit(*this, binop->rhs->toVariant());
+        std::cout << ")";
+    }
+    
+    // ... other expression types
+};
+
+ExpressionPrinter printer;
+std::visit(printer, expr->toVariant());
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Type" icon="brackets-curly" href="/api/types">
+    Type system and type representations
+  </Card>
+  <Card title="Type Checker" icon="check-double" href="/api/type-checker">
+    Constraint-based type inference
+  </Card>
+</CardGroup>

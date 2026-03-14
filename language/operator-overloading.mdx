@@ -1,0 +1,348 @@
+---
+title: Operator Overloading
+description: Define custom behavior for operators on your types using Yoyo's operator overloading system
+---
+
+Yoyo supports operator overloading, allowing you to define custom behavior for built-in operators when applied to your types. This enables natural syntax for user-defined types like vectors, matrices, and custom collections.
+
+## Operator Declaration Syntax
+
+Operators are declared using the `operator` keyword followed by the operator symbol:
+
+```yoyo
+operator: [op] (parameters) -> return_type = body
+```
+
+## Arithmetic Operators
+
+Overload arithmetic operators for mathematical types:
+
+### Binary Arithmetic
+
+```yoyo
+operator: +. (This, Other) -> Result
+operator: -. (This, Other) -> Result
+operator: *. (This, Other) -> Result
+operator: /. (This, Other) -> Result
+operator: %. (This, Other) -> Result
+```
+
+**Example: Vector Addition**
+
+```yoyo
+Vector2: struct = {
+    x: i32,
+    y: i32
+}
+
+operator: +. (a: Vector2, b: Vector2) -> Vector2 = {
+    return Vector2{.x = a.x + b.x, .y = a.y + b.y};
+}
+
+// Usage
+v1 := Vector2{.x = 1, .y = 2};
+v2 := Vector2{.x = 3, .y = 4};
+v3 := v1 + v2;  // Vector2{.x = 4, .y = 6}
+```
+
+### Unary Arithmetic
+
+```yoyo
+operator: -.(This) -> Result  // Negation
+operator: !.(This) -> Result  // Logical NOT
+```
+
+**Example: Vector Negation**
+
+```yoyo
+operator: -. (v: Vector2) -> Vector2 = {
+    return Vector2{.x = -v.x, .y = -v.y};
+}
+
+// Usage
+v := Vector2{.x = 5, .y = -3};
+negated := -v;  // Vector2{.x = -5, .y = 3}
+```
+
+## Bitwise Operators
+
+```yoyo
+operator: &. (This, Other) -> Result  // Bitwise AND
+operator: |. (This, Other) -> Result  // Bitwise OR
+operator: ^. (This, Other) -> Result  // Bitwise XOR
+operator: <<.(This, Other) -> Result  // Left shift
+operator: >>.(This, Other) -> Result  // Right shift
+```
+
+## Indexing Operators
+
+Yoyo provides three indexing operator variants:
+
+### Immutable Indexing
+
+For read-only access:
+
+```yoyo
+operator: [](x: &Vector2, y: u32) -> u32 = {
+    if (y == 0) return x.x; 
+    else return x.y;
+}
+
+// Usage
+v := Vector2{.x = 90, .y = 20};
+first := v[0];   // 90
+second := v[1];  // 20
+```
+
+### Mutable Indexing
+
+For read-write access:
+
+```yoyo
+operator: mut [](x: &mut Vector2, y: u32) -> &mut u32 = {
+    if (y == 0) return &mut x.x;
+    else return &mut x.y;
+}
+
+// Usage
+v: mut = Vector2{.x = 1, .y = 2};
+v[0] = 100;  // Modifies v.x
+```
+
+### Indexing Assignment
+
+Custom behavior when index is used on the left side:
+
+```yoyo
+operator: mut [](x: &mut u32, y: &Vector2) -> void = {
+    *x = y.x;
+}
+
+// Usage from source.yoyo
+func_2: fn = {
+    a: mut = Vector2{.x = 90, .y = 20};
+    b: mut u32 = 10;
+    test::print(&"${b}");  // 10
+    b[&a];                  // Calls operator, sets b = a.x
+    test::print(&"${b}");  // 90
+}
+```
+
+## Comparison Operators
+
+Yoyo provides two options for comparison:
+
+### Option 1: Spaceship Operator
+
+Implement the three-way comparison operator:
+
+```yoyo
+operator: <=> (&This, Other) -> StrongOrdering
+// or
+operator: <=> (&This, Other) -> PartialOrdering
+```
+
+This automatically generates `<`, `<=`, `>`, `>=`, `==`, and `!=`.
+
+**Example:**
+
+```yoyo
+StrongOrdering: enum = { Less, Equal, Greater }
+
+operator: <=> (&Vector2, other: &Vector2) -> StrongOrdering = {
+    mag_this := this.x * this.x + this.y * this.y;
+    mag_other := other.x * other.x + other.y * other.y;
+    
+    if (mag_this < mag_other) return StrongOrdering::Less;
+    else if (mag_this > mag_other) return StrongOrdering::Greater;
+    else return StrongOrdering::Equal;
+}
+
+// Usage
+v1 := Vector2{.x = 1, .y = 0};
+v2 := Vector2{.x = 2, .y = 0};
+if (v1 < v2) {  // Automatically generated from <=>
+    // v1 is smaller
+}
+```
+
+### Option 2: Equality Operator
+
+Implement only equality comparison:
+
+```yoyo
+operator: == (&This, Other) -> bool
+```
+
+This generates `==` and `!=` operators.
+
+**Example:**
+
+```yoyo
+operator: == (&Vector2, other: &Vector2) -> bool = {
+    return this.x == other.x && this.y == other.y;
+}
+
+// Usage
+if (v1 == v2) {
+    // Vectors are equal
+}
+if (v1 != v2) {  // Automatically generated
+    // Vectors are different
+}
+```
+
+## Compound Assignment Operators
+
+Compound assignment operators are **automatically generated**:
+
+```yoyo
++=  -=  *=  /=  %=  >>=  <<=  &=  ^=  |=
+```
+
+These are expanded to their binary form:
+
+```yoyo
+val += other  
+// Expands to:
+val = val + other  // val is moved into the + operation
+```
+
+<Note>
+You don't need to implement compound assignment operators separately. Just implement the binary operator (`+`, `-`, etc.) and the compound form is automatically available.
+</Note>
+
+**Example:**
+
+```yoyo
+// Only implement binary +
+operator: +. (a: Vector2, b: Vector2) -> Vector2 = {
+    return Vector2{.x = a.x + b.x, .y = a.y + b.y};
+}
+
+// += is automatically available
+v: mut = Vector2{.x = 1, .y = 2};
+v += Vector2{.x = 3, .y = 4};  // v becomes {.x = 4, .y = 6}
+```
+
+## Mutability in Operators
+
+Operators can be marked as `mut` to indicate they modify their operands:
+
+```yoyo
+// Immutable operator (read-only)
+operator: [](x: &Vector2, y: u32) -> u32 = {
+    // Cannot modify x
+    if (y == 0) return x.x; 
+    else return x.y;
+}
+
+// Mutable operator (can modify)
+operator: mut [](x: &mut Vector2, y: u32) -> &mut u32 = {
+    // Can modify x
+    if (y == 0) return &mut x.x;
+    else return &mut x.y;
+}
+```
+
+## Generic Operators
+
+Operators can be generic:
+
+```yoyo
+// Generic indexing for any type
+operator::<T> [](container: &Container::<T>, index: usize) -> &T = {
+    // Return reference to element at index
+}
+```
+
+## Future Considerations
+
+The following operators are being considered for future versions:
+
+```yoyo
+operator: deref(This) -> &T       // Deref operator
+operator: deref_mut(This) -> &mut T  // Mutable deref operator
+```
+
+These would enable custom smart pointer types.
+
+## Complete Example
+
+Here's a complete example from the Yoyo test suite:
+
+```yoyo
+func_2: fn = {
+    a: mut = Vector2{.x = 90, .y = 20};
+    test::print(&"${(a)[0]}, ${(a)[1]}");  // "90, 20"
+    
+    b: mut u32 = 10;
+    test::print(&"${b}");  // "10"
+    b[&a];                  // Custom indexing assignment
+    test::print(&"${b}");  // "90"
+}
+
+Vector2: struct = {
+    x: u32, 
+    y: u32
+}
+
+// Custom indexing assignment: b[&a] sets b = a.x
+operator: mut [](x: &mut u32, y: &Vector2) -> void = {
+    *x = y.x;
+}
+
+// Read-only indexing: a[0] returns a.x, a[1] returns a.y
+operator: [](x: &Vector2, y: u32) -> u32 = {
+    if (y == 0) return x.x; 
+    else return x.y;
+}
+
+// Mutable indexing (returns reference)
+operator: mut [](x: &mut Vector2, y: u32) -> u32 = {
+    return 100;  // Example implementation
+}
+```
+
+## Operator Precedence
+
+Operators follow standard C++ precedence rules:
+
+1. `[]` (indexing)
+2. Unary `-`, `!`
+3. `*`, `/`, `%`
+4. `+`, `-`
+5. `<<`, `>>`
+6. `<`, `<=`, `>`, `>=`
+7. `==`, `!=`
+8. `&`
+9. `^`
+10. `|`
+
+## Best Practices
+
+<Steps>
+  <Step title="Follow Mathematical Conventions">
+    Operators should behave intuitively. `+` should be commutative for mathematical types.
+  </Step>
+  
+  <Step title="Implement Related Operators Together">
+    If you implement `+`, also consider implementing `-`. If you implement `<=>`, you get all comparison operators.
+  </Step>
+  
+  <Step title="Use References for Large Types">
+    Take parameters by reference (`&This`) for structs to avoid unnecessary copying.
+  </Step>
+  
+  <Step title="Document Non-Obvious Behavior">
+    If your operator does something unexpected (like the `b[&a]` example), document it clearly.
+  </Step>
+</Steps>
+
+<Warning>
+Operator overloading is powerful but can make code harder to understand if misused. Only overload operators when the behavior is intuitive.
+</Warning>
+
+<Card title="Next: Interfaces" icon="plug" href="/language/interfaces">
+Learn how to define and implement interfaces for polymorphic code
+</Card>

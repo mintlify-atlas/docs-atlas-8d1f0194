@@ -1,0 +1,358 @@
+---
+title: 'Functions'
+description: 'Master function declarations, parameters, member functions, and generic functions in Yoyo'
+---
+
+Functions are first-class citizens in Yoyo. They can be standalone, members of structs/enums/unions, generic, and even stored in variables.
+
+## Function Declaration
+
+Functions follow the standard Yoyo declaration syntax:
+
+```yoyo
+name: fn (params) -> return_type = body
+```
+
+### Basic Functions
+
+```yoyo
+main: fn = {
+    "Hello, World!".test::print();
+}
+
+player_text: fn (p: &[Player; 9], alt: i32) -> str = {
+    if (*(*p)[alt] == Player::X) 
+        return "X";
+    else if (*(*p)[alt] == Player::O)
+        return "O";
+    return "${alt}";
+}
+```
+
+### Implicit Return Blocks
+
+Single-expression functions can omit braces:
+
+```yoyo
+cycle: fn (p: Player) -> Player = 
+    if (p == Player::X) return Player::O;
+    else if (p == Player::O) return Player::X;
+    else return p;
+
+new: fn -> This = return This{ .first = null };
+```
+
+## Parameters
+
+### By-Value Parameters
+
+Parameters are passed by value by default:
+
+```yoyo
+add: fn (a: i32, b: i32) -> i32 = return a + b;
+```
+
+### Reference Parameters
+
+Use `&` for immutable references:
+
+```yoyo
+render: fn (&this) = {
+    intermediate := "───┼───┼───";
+    row1 := " ${player_text(&this.data, 0)} │ ...";
+    row1.test::print();
+}
+```
+
+### Mutable Reference Parameters
+
+Use `&mut` for mutable references:
+
+```yoyo
+append: fn (&mut this, value: T) = {
+    if |val| (this.first) {
+        last: mut = val;
+        // Modify last
+        last.next = gcnew Node::<T>{.data = value, .next = null};
+    } else {
+        this.first = gcnew Node::<T>{.data = value, .next = null};
+    }
+}
+
+play: fn (&mut this) = {
+    "${this.player}'s turn: ".test::print();
+    idx: mut u32 = 10;
+    while (idx > 9 && *this.data[idx] != Player::None) {
+        idx = test::read_uint();
+    }
+    *this.data[idx] = this.player;
+    this.player = this.player.cycle();
+}
+```
+
+## Return Types
+
+### Explicit Return Type
+
+```yoyo
+check_winner: fn (&this) -> Player? = {
+    // Horizontal winner
+    if (*this.data[0] == *this.data[1] && *this.data[1] == *this.data[2])
+        return *this.data[0];
+    
+    // ...
+    
+    return null;  // Optional return
+}
+```
+
+### Void Returns
+
+Functions without a return type implicitly return `void`:
+
+```yoyo
+print_message: fn = {
+    "Hello".test::print();
+    // No return statement needed
+}
+```
+
+### Optional Returns
+
+Functions can return optional values:
+
+```yoyo
+next: fn (&mut this) -> (&T)? = {
+    if |node| (this.curr) {
+        this.curr = node.next;
+        return &node.data;
+    }
+    else return null;
+}
+```
+
+## Member Functions
+
+Functions defined within struct/enum/union declarations:
+
+### Struct Member Functions
+
+```yoyo
+Game: struct = {
+    data: [Player; 9],
+    player: Player,
+    
+    // Static member function (no this parameter)
+    new: fn -> Game = {
+        return Game{ 
+            .data = [
+                Player::None, Player::None, Player::None,
+                Player::None, Player::None, Player::None,
+                Player::None, Player::None, Player::None
+            ],
+            .player = Player::X
+        };
+    }
+    
+    // Instance member function (immutable this)
+    render: fn (&this) = {
+        // Can read this.data and this.player
+    }
+    
+    // Mutating member function (mutable this)
+    play: fn (&mut this) = {
+        // Can modify this.data and this.player
+    }
+}
+
+// Usage
+game: mut = Game::new();   // Static function call
+game.render();              // Instance method call
+game.play();                // Mutating method call
+```
+
+### The `This` Keyword
+
+`This` refers to the enclosing type:
+
+```yoyo
+LinkedList: struct::<T> = {
+    first: (^Node::<T>)?,
+    new: fn -> This = return This{ .first = null };  // This = LinkedList::<T>
+}
+```
+
+## Generic Functions
+
+Functions can be generic over type parameters:
+
+### Generic Function Syntax
+
+```yoyo
+iter: fn::<T> (list: &LinkedList::<T>) -> LinkedListIterator::<T>
+    = return LinkedListIterator::<T> { .curr = list.first };
+```
+
+### Multiple Type Parameters
+
+```yoyo
+enumerate: fn::<T: impl core::Iterator::<O>, O> (iter: T) ->
+    EnumerateIter::<T, O> = 
+    return EnumerateIter::<T, O>{.actual_iter = iter, .idx = 0};
+```
+
+### Generic Constraints
+
+Type parameters can be constrained to implement interfaces:
+
+```yoyo
+chain: fn::<
+    A: impl core::Iterator::<O>, 
+    B: impl core::Iterator::<O>, 
+    O
+> (first: A, snd: B) -> ChainIter::<A, B, O> = 
+    return ChainIter::<A, B, O>{
+        .first_iter = first, 
+        .second_iter = snd
+    };
+```
+
+<Note>
+Generic constraints use the `impl Interface` syntax to specify that a type parameter must implement a particular interface.
+</Note>
+
+## Function Calls
+
+### Direct Function Calls
+
+```yoyo
+result := add(5, 10);
+player_str := player_text(&board, 3);
+```
+
+### Method Calls
+
+```yoyo
+game.render();
+a.append("Hello");
+list.iter();
+```
+
+### Generic Function Calls
+
+Type parameters are usually inferred:
+
+```yoyo
+a: mut = LinkedList::<str>::new();  // Explicit type parameter
+iterator := a.iter();                // Type inferred from a
+```
+
+### Chained Calls
+
+```yoyo
+for (lol in a.iter().chain(b.iter()).enumerate()) {
+    app::func(&"${lol.0}: ${*lol.1}");
+}
+```
+
+## Lambda Functions (Experimental)
+
+Yoyo supports lambda/closure syntax:
+
+```yoyo
+print_list: stored = ||(list: &List) 
+    for (elem in list.iter()) 
+        std::println("${*elem}");
+
+print_list(&list);
+```
+
+<Warning>
+Lambda syntax and semantics are still being refined.
+</Warning>
+
+## Higher-Order Functions
+
+Functions can accept and return other functions:
+
+```yoyo
+EnumerateIter: struct::<T, O> impl core::Iterator::<(u64, O)> = {
+    actual_iter: T,
+    idx: u64,
+    
+    impl core::Iterator::<(u64, O)> {
+        next: fn (&mut this) -> (u64, O)? = {
+            if |nxt| (this.actual_iter.core::Iterator::<O>::next()) {
+                this.idx = this.idx + 1;
+                return (this.idx, nxt);
+            }
+            else return null;
+        }
+    }
+}
+```
+
+## Function Signatures
+
+Function types can be used in type annotations:
+
+```yoyo
+Callback: alias = fn (i32, i32) -> bool;
+
+register: fn (cb: Callback) = {
+    // Use callback
+}
+```
+
+## Attributes on Functions
+
+Functions can have attributes (syntax evolving):
+
+```yoyo
+#[public]
+api_function: fn = {
+    // Public API
+}
+
+#[inline]
+fast_path: fn (x: i32) -> i32 = return x * 2;
+```
+
+## Module-Qualified Calls
+
+Call functions from other modules:
+
+```yoyo
+app: module = APP
+
+main: fn = {
+    app::func(&"message");
+    test::print(&"Hello");
+}
+```
+
+## Interface Methods
+
+Functions can be part of interface implementations:
+
+```yoyo
+LinkedListIterator: struct:&::<T> impl core::Iterator::<&T> = {
+    curr: (^Node::<T>)?,
+    
+    impl core::Iterator::<&T> {
+        next: fn (&mut this) -> (&T)? = {
+            if |node| (this.curr) {
+                this.curr = node.next;
+                return &node.data;
+            }
+            else return null;
+        }
+    }
+}
+```
+
+See the [Interfaces](/language/interfaces) page for more details on interface implementation.
+
+<Card title="Next Steps" icon="arrow-right" href="/language/generics">
+Learn about Yoyo's powerful generics system
+</Card>

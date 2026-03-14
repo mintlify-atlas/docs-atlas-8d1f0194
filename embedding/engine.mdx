@@ -1,0 +1,378 @@
+---
+title: 'Engine Initialization'
+description: 'Create and configure the Yoyo execution engine'
+---
+
+## Engine Overview
+
+The Yoyo engine is the core runtime that manages module compilation, code execution, and the fiber-based concurrency system. Yoyo provides two backend implementations:
+
+- **LLVMEngine**: LLVM-based JIT compilation for maximum performance
+- **YVMEngine**: Custom VM backend for faster compilation and smaller binaries
+
+## Choosing an Engine
+
+<CodeGroup>
+  ```cpp LLVM Engine
+  #include <llvm/llvm_engine.h>
+
+  int main() {
+      Yoyo::LLVMEngine engine;
+      // Engine is ready to use
+  }
+  ```
+
+  ```cpp YVM Engine
+  #include <yvm/yvm_engine.h>
+
+  int main() {
+      Yoyo::YVMEngine engine;
+      // Engine is ready to use
+  }
+  ```
+</CodeGroup>
+
+<Note>
+Both engines inherit from the abstract `Yoyo::Engine` base class (defined in `include/yoyo/engine.h`), providing a consistent API regardless of the backend.
+</Note>
+
+## Engine Class Hierarchy
+
+The engine architecture follows this inheritance model:
+
+```cpp
+class Engine {
+protected:
+    Runtime rt;  // Fiber-based runtime
+public:
+    Engine();
+    virtual ~Engine() = default;
+    
+    // Module management
+    std::unordered_map<std::string, std::unique_ptr<ModuleBase>> modules;
+    std::unordered_map<std::string, std::pair<std::string, 
+        std::vector<std::unique_ptr<Statement>>>> sources;
+    
+    // Execution control
+    void execute();
+    void sleep(uint64_t milliseconds);
+    
+    // String utilities
+    static std::string_view viewString(void* str);
+    
+    // Subclass-specific
+    virtual void* createGlobalConstant(const Type& type, 
+        const std::vector<Constant>& args, IRGenerator*) = 0;
+};
+```
+
+### Key Components
+
+<ParamField path="rt" type="Runtime">
+  The fiber-based concurrency runtime that manages coroutines, scheduling, and cooperative multitasking.
+</ParamField>
+
+<ParamField path="modules" type="std::unordered_map">
+  Container for all loaded modules (both source modules and application modules).
+</ParamField>
+
+<ParamField path="sources" type="std::unordered_map">
+  Parsed source code storage, mapping module names to their AST representations.
+</ParamField>
+
+## LLVM Engine
+
+The `LLVMEngine` uses LLVM's ORC JIT infrastructure for native code generation:
+
+```cpp include/yoyo/llvm/llvm_engine.h
+class LLVMEngine : public Engine {
+public:
+    llvm::orc::ThreadSafeContext llvm_context;
+    std::unique_ptr<llvm::orc::LLJIT> jit;
+    
+    // Module management
+    LLVMAppModule* addAppModule(const std::string& name);
+    void addModule(const std::string& module_name, std::string source);
+    
+    // Compilation
+    void compile();
+    void prepareForExecution();
+    
+    // Native library linking
+    void addStaticLibrary(std::string_view path);
+    void addDynamicLibrary(std::string_view path);
+    
+    virtual void* createGlobalConstant(const Type& type, 
+        const std::vector<Constant>& args, IRGenerator*) override;
+};
+```
+
+### LLVM Engine Example
+
+```cpp
+#include <llvm/llvm_engine.h>
+#include <llvm/app_module.h>
+#include <fstream>
+#include <sstream>
+
+int main() {
+    Yoyo::LLVMEngine engine;
+    
+    // Add application module for C++ interop
+    auto* app_module = engine.addAppModule("myapp");
+    
+    // Load Yoyo source code
+    std::ifstream file("script.yoyo");
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    std::string source = buffer.str();
+    
+    engine.addModule("script", source);
+    
+    // Link external libraries
+    engine.addDynamicLibrary("libmath.so");
+    
+    // Compile all modules
+    engine.compile();
+    engine.prepareForExecution();
+    
+    // Execute
+    engine.execute();
+    
+    return 0;
+}
+```
+
+## YVM Engine
+
+The `YVMEngine` uses a custom bytecode VM for faster startup and smaller footprint:
+
+```cpp include/yoyo/yvm/yvm_engine.h
+class YVMEngine : public Engine {
+public:
+    YVMEngine();
+    ~YVMEngine() override;
+    
+    // Module management
+    YVMAppModule* addAppModule(const std::string& name);
+    ModuleBase* addModule(const std::string& module_name, std::string source);
+    
+    // Compilation
+    bool compile();
+    void prepareForExecution();
+    
+    // Native library linking
+    void addDynamicLibrary(std::string_view path);
+    
+    // Fiber creation
+    Fiber createFiber(const FunctionTy& fn);
+    std::optional<FunctionTy> findFunction(ModuleBase* mod, 
+        const std::string& function_name);
+    
+    // Native function lookup
+    void* findNativeFunction(const std::string& name);
+    
+    virtual void* createGlobalConstant(const Type& type, 
+        const std::vector<Constant>& args, IRGenerator*) override;
+    
+    // VM instance
+    Yvm::VM vm;
+};
+```
+
+### YVM Engine Example
+
+```cpp
+#include <yvm/yvm_engine.h>
+#include <yvm/app_module.h>
+
+int main() {
+    Yoyo::YVMEngine engine;
+    
+    // Add application module
+    auto* app_module = engine.addAppModule("myapp");
+    
+    // Load source
+    std::string source = R"(
+        main: fn() = {
+            myapp::print("Hello from Yoyo!");
+        }
+    )";
+    
+    auto* module = engine.addModule("main", source);
+    
+    // Compile and execute
+    if (engine.compile()) {
+        engine.prepareForExecution();
+        
+        // Find and execute main function
+        auto main_fn = engine.findFunction(module, 
+            module->module_hash + "main");
+        if (main_fn) {
+            auto fiber = engine.createFiber(*main_fn);
+            engine.execute();
+        }
+    }
+    
+    return 0;
+}
+```
+
+## Runtime and Execution Model
+
+Yoyo uses a fiber-based concurrency model built on top of minicoro:
+
+```cpp include/yoyo/runtime.h
+struct Runtime {
+    std::vector<mco_coro*> routs;           // Ready-to-run fibers
+    std::vector<mco_coro*> dead_coros;      // Completed fibers
+    std::unordered_map<mco_coro*, bool> is_externally_owned;
+    
+    using TimePoint = std::chrono::time_point<std::chrono::steady_clock>;
+    std::vector<std::pair<mco_coro*,
+        std::variant<mco_coro*, TimePoint, std::monostate>>> waiting;
+    
+    void run();                    // Execute all fibers until completion
+    void add_job(mco_coro*);      // Add externally-owned fiber
+    void release_job(mco_coro*);  // Mark fiber as internally owned
+};
+```
+
+### Fiber Management
+
+The `Fiber` class provides RAII management for coroutines:
+
+```cpp include/yoyo/runtime.h
+struct Fiber {
+    void* parameters;
+    void* return_val;
+    mco_coro* coro;
+    Runtime* rt;
+    
+    Fiber(void* param, void* ret_val, mco_coro* coro, Runtime* rt);
+    Fiber(const Fiber&) = delete;  // Non-copyable
+    
+    template<typename T>
+    T get() {
+        auto val = std::move(*reinterpret_cast<T*>(return_val));
+        forget();
+        return val;
+    }
+    
+    void forget();  // Release without destroying
+    ~Fiber();       // Automatic cleanup
+};
+```
+
+### Execution Flow
+
+<Steps>
+  <Step title="Load Modules">
+    Add application modules and source modules to the engine
+  </Step>
+  
+  <Step title="Compile">
+    Call `compile()` to parse, type-check, and generate code
+  </Step>
+  
+  <Step title="Prepare">
+    Call `prepareForExecution()` to link modules and initialize runtime
+  </Step>
+  
+  <Step title="Create Fibers">
+    Find functions and create fiber instances (YVM) or call directly (LLVM)
+  </Step>
+  
+  <Step title="Execute">
+    Call `execute()` to run the fiber scheduler until all work completes
+  </Step>
+</Steps>
+
+## Execution Control
+
+### Running the Event Loop
+
+```cpp
+void execute() {
+    rt.run();  // Run until all fibers complete
+}
+```
+
+The `execute()` method blocks until all fibers have finished execution.
+
+### Cooperative Sleep
+
+```cpp
+// Sleep for specified milliseconds
+void sleep(uint64_t milliseconds);
+
+// Sleep using chrono duration
+template<class Rep, class Period>
+void sleep(const std::chrono::duration<Rep, Period>& sleep_duration);
+```
+
+Example:
+```cpp
+engine.sleep(1000);                           // 1 second
+engine.sleep(std::chrono::seconds(5));        // 5 seconds
+engine.sleep(std::chrono::milliseconds(500)); // 500ms
+```
+
+<Warning>
+The `sleep()` method yields the current fiber. Only call this from within Yoyo code or fiber contexts, not from the main C++ thread.
+</Warning>
+
+## String Utilities
+
+Yoyo strings use a custom layout. Use `viewString()` to convert them to C++ `string_view`:
+
+```cpp
+static std::string_view viewString(void* str);
+```
+
+Example:
+```cpp
+void print_string(void* yoyo_str) {
+    auto view = Yoyo::Engine::viewString(yoyo_str);
+    std::cout << view << std::endl;
+}
+```
+
+Internal structure:
+```cpp
+struct String {
+    char* data;
+    uint64_t len;
+    uint64_t cap;
+};
+```
+
+## Performance Considerations
+
+### LLVM vs YVM
+
+| Aspect | LLVM Engine | YVM Engine |
+|--------|-------------|------------|
+| **Compilation Speed** | Slower (JIT overhead) | Faster (bytecode) |
+| **Execution Speed** | Faster (native code) | Moderate (interpreted) |
+| **Binary Size** | Larger (LLVM dependency) | Smaller |
+| **Best For** | Long-running scripts, performance-critical | Quick scripts, rapid iteration |
+
+### Tips
+
+<Tip>
+- Use **LLVM** for production deployments where execution speed matters
+- Use **YVM** for development, testing, and scenarios where startup time is critical
+- Both engines share the same API, making it easy to switch between them
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Module System" icon="cube" href="/embedding/modules">
+    Learn how to load source modules and create application modules
+  </Card>
+  <Card title="C++ Interop" icon="link" href="/embedding/interop">
+    Expose C++ functions and types to Yoyo scripts
+  </Card>
+</CardGroup>

@@ -1,0 +1,517 @@
+---
+title: 'ModuleBase'
+description: 'Module system interface for organizing Yoyo code'
+---
+
+The `ModuleBase` class provides the foundation for Yoyo's module system, managing functions, classes, types, and other declarations within a module scope.
+
+## Class Definition
+
+```cpp
+class ModuleBase
+{
+public:
+    struct FunctionDetails {
+        std::string name;
+        FunctionSignature sig;
+        std::vector<Attribute> attributes;
+        bool is_private() const;
+    };
+    
+    virtual ~ModuleBase() = default;
+    
+    // Module hierarchy
+    Engine* engine;
+    std::string module_hash;
+    std::unordered_map<std::string, ModuleBase*> modules;
+    
+    // ... declaration maps
+};
+```
+
+## FunctionDetails
+
+Nested structure containing metadata about module functions.
+
+```cpp
+struct FunctionDetails
+{
+    std::string name;
+    FunctionSignature sig;
+    std::vector<Attribute> attributes;
+    bool is_private() const;
+};
+```
+
+### Members
+
+<ParamField path="name" type="std::string">
+  The function name
+</ParamField>
+
+<ParamField path="sig" type="FunctionSignature">
+  The function's signature including parameter types and return type
+</ParamField>
+
+<ParamField path="attributes" type="std::vector<Attribute>">
+  Function attributes (e.g., `@public`, `@inline`, etc.)
+</ParamField>
+
+### is_private()
+
+Determines if a function is private (not marked with `@public` attribute).
+
+```cpp
+bool is_private() const;
+```
+
+#### Returns
+
+<ResponseField name="return" type="bool">
+  `true` if the function is private (no `@public` attribute), `false` if public
+</ResponseField>
+
+#### Example
+
+```cpp
+Yoyo::ModuleBase::FunctionDetails details;
+details.name = "helper";
+// No @public attribute added
+
+if (details.is_private()) {
+    std::cout << "Function is private to the module" << std::endl;
+}
+```
+
+## Public Members
+
+### engine
+
+```cpp
+Engine* engine;
+```
+
+Pointer to the parent Engine instance.
+
+### module_hash
+
+```cpp
+std::string module_hash;
+```
+
+Unique hash identifier for this module.
+
+### modules
+
+```cpp
+std::unordered_map<std::string, ModuleBase*> modules;
+```
+
+Map of submodules within this module, indexed by name.
+
+### functions
+
+```cpp
+std::unordered_map<std::string, std::vector<FunctionDetails>> functions;
+```
+
+Map of function overloads, indexed by function name. Multiple overloads per name are supported.
+
+### classes
+
+```cpp
+std::unordered_map<std::string, std::vector<std::pair<std::string, std::unique_ptr<ClassDeclaration>>>> classes;
+```
+
+Map of class declarations indexed by class name.
+
+### generic_classes
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<GenericClassDeclaration>>> generic_classes;
+```
+
+Map of generic class declarations (classes with type parameters).
+
+### interfaces
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<InterfaceDeclaration>>> interfaces;
+```
+
+Map of interface declarations.
+
+### generic_interfaces
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<GenericInterfaceDeclaration>>> generic_interfaces;
+```
+
+Map of generic interface declarations.
+
+### unions
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<UnionDeclaration>>> unions;
+```
+
+Map of union type declarations.
+
+### enums
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<EnumDeclaration>>> enums;
+```
+
+Map of enumeration declarations.
+
+### aliases
+
+```cpp
+std::unordered_map<std::string, std::unordered_map<std::string, Type>> aliases;
+```
+
+Map of type aliases.
+
+### generic_aliases
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<GenericAliasDeclaration>>> generic_aliases;
+```
+
+Map of generic type alias declarations.
+
+### constants
+
+```cpp
+std::unordered_map<std::string, std::vector<std::tuple<Type, std::string, std::variant<Constant, ConstantDeclaration*>>>> constants;
+```
+
+Map of module-level constants.
+
+### macros
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<MacroDeclaration>>> macros;
+```
+
+Map of macro declarations.
+
+### generic_fns
+
+```cpp
+std::unordered_map<std::string, std::vector<std::unique_ptr<GenericFunctionDeclaration>>> generic_fns;
+```
+
+Map of generic function declarations (functions with type parameters).
+
+### overloads
+
+```cpp
+ModuleOverloadDetails overloads;
+```
+
+Details about operator overloads defined in this module.
+
+## Lookup Methods
+
+The module provides various lookup methods for finding declarations within a module hierarchy.
+
+### findFunction()
+
+Finds a function by name within a specific block scope.
+
+```cpp
+std::pair<std::string, FunctionDetails*> findFunction(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+#### Parameters
+
+<ParamField path="block" type="const std::string&" required>
+  The block/scope name to search in
+</ParamField>
+
+<ParamField path="name" type="const std::string&" required>
+  The function name to find
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::pair<std::string, FunctionDetails*>">
+  Pair of (qualified name, pointer to function details), or (empty, nullptr) if not found
+</ResponseField>
+
+#### Example
+
+```cpp
+auto [qualifiedName, funcDetails] = module.findFunction("MyClass", "myMethod");
+if (funcDetails != nullptr) {
+    std::cout << "Found function: " << funcDetails->name << std::endl;
+}
+```
+
+---
+
+### findGenericFn()
+
+Finds a generic function declaration.
+
+```cpp
+std::pair<std::string, GenericFunctionDeclaration*> findGenericFn(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+#### Parameters
+
+<ParamField path="block" type="const std::string&" required>
+  The block/scope name to search in
+</ParamField>
+
+<ParamField path="name" type="const std::string&" required>
+  The generic function name to find
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::pair<std::string, GenericFunctionDeclaration*>">
+  Pair of (qualified name, pointer to generic function), or (empty, nullptr) if not found
+</ResponseField>
+
+---
+
+### findClass()
+
+Finds a class declaration by name.
+
+```cpp
+std::pair<std::string, std::pair<std::string, std::unique_ptr<ClassDeclaration>>*> findClass(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+#### Parameters
+
+<ParamField path="block" type="const std::string&" required>
+  The block/scope name to search in
+</ParamField>
+
+<ParamField path="name" type="const std::string&" required>
+  The class name to find
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::pair<std::string, std::pair<std::string, std::unique_ptr<ClassDeclaration>>*>">
+  Pair containing qualified name and pointer to class declaration pair
+</ResponseField>
+
+---
+
+### findGenericClass()
+
+Finds a generic class declaration.
+
+```cpp
+std::pair<std::string, GenericClassDeclaration*> findGenericClass(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findInterface()
+
+Finds an interface declaration.
+
+```cpp
+std::pair<std::string, InterfaceDeclaration*> findInterface(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findGenericInterface()
+
+Finds a generic interface declaration.
+
+```cpp
+std::pair<std::string, GenericInterfaceDeclaration*> findGenericInterface(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findEnum()
+
+Finds an enumeration declaration.
+
+```cpp
+std::pair<std::string, EnumDeclaration*> findEnum(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findUnion()
+
+Finds a union type declaration.
+
+```cpp
+std::pair<std::string, UnionDeclaration*> findUnion(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findAlias()
+
+Finds a type alias.
+
+```cpp
+Type* findAlias(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+#### Returns
+
+<ResponseField name="return" type="Type*">
+  Pointer to the aliased type, or nullptr if not found
+</ResponseField>
+
+---
+
+### findGenericAlias()
+
+Finds a generic type alias declaration.
+
+```cpp
+std::pair<std::string, GenericAliasDeclaration*> findGenericAlias(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findConst()
+
+Finds a constant declaration.
+
+```cpp
+std::pair<std::string, std::tuple<Type, std::string, std::variant<Constant, ConstantDeclaration*>>*> findConst(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+---
+
+### findMacro()
+
+Finds a macro declaration.
+
+```cpp
+MacroDeclaration* findMacro(
+    const std::string& block, 
+    const std::string& name
+);
+```
+
+#### Returns
+
+<ResponseField name="return" type="MacroDeclaration*">
+  Pointer to the macro declaration, or nullptr if not found
+</ResponseField>
+
+---
+
+### hashOf()
+
+Gets the module hash for a given name in a block.
+
+```cpp
+std::optional<std::string> hashOf(
+    const std::string& base_block, 
+    const std::string& name
+);
+```
+
+#### Parameters
+
+<ParamField path="base_block" type="const std::string&" required>
+  The base block to search from
+</ParamField>
+
+<ParamField path="name" type="const std::string&" required>
+  The name to get the hash for
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::optional<std::string>">
+  The module hash if found, or `std::nullopt` if not found
+</ResponseField>
+
+## Usage Example
+
+```cpp
+#include <yoyo/module.h>
+#include <yoyo/engine.h>
+#include <iostream>
+
+class MyModule : public Yoyo::ModuleBase {
+public:
+    MyModule(Yoyo::Engine* eng) {
+        engine = eng;
+        module_hash = "my_module_v1";
+    }
+    
+    void registerFunction(const std::string& name, 
+                         const Yoyo::FunctionSignature& sig) {
+        FunctionDetails details;
+        details.name = name;
+        details.sig = sig;
+        functions[name].push_back(details);
+    }
+};
+
+int main() {
+    MyEngine engine;
+    MyModule module(&engine);
+    
+    // Register the module
+    engine.modules["MyModule"] = std::make_unique<MyModule>(module);
+    
+    // Look up a function
+    auto [qualName, func] = module.findFunction("", "myFunction");
+    if (func) {
+        std::cout << "Found function: " << func->name << std::endl;
+        if (func->is_private()) {
+            std::cout << "Function is private" << std::endl;
+        }
+    }
+    
+    return 0;
+}
+```
+
+<Note>
+The ModuleBase class is designed to be extended. You typically don't instantiate it directly, but create derived classes that implement module-specific functionality.
+</Note>

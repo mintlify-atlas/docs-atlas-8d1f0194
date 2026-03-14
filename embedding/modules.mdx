@@ -1,0 +1,537 @@
+---
+title: 'Module System'
+description: 'Load Yoyo source modules and create application modules for C++ integration'
+---
+
+## Module Types
+
+Yoyo supports two types of modules:
+
+1. **Source Modules**: Written in Yoyo language, loaded from files or strings
+2. **Application Modules**: Created in C++ to expose native functions, types, and constants
+
+## Module Base Class
+
+All modules inherit from `ModuleBase` defined in `include/yoyo/module.h`:
+
+```cpp
+class ModuleBase {
+public:
+    virtual ~ModuleBase() = default;
+    
+    ModuleOverloadDetails overloads;
+    Engine* engine;
+    std::unordered_map<std::string, ModuleBase*> modules;
+    std::string module_hash;
+    
+    // Declarations
+    std::unordered_map<std::string, std::vector<FunctionDetails>> functions;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, 
+        std::unique_ptr<ClassDeclaration>>>> classes;
+    std::unordered_map<std::string, std::vector<std::unique_ptr<UnionDeclaration>>> unions;
+    std::unordered_map<std::string, std::unordered_map<std::string, Type>> aliases;
+    std::unordered_map<std::string, std::vector<std::unique_ptr<EnumDeclaration>>> enums;
+    // ... and more
+    
+    // Lookup functions
+    std::pair<std::string, FunctionDetails*> findFunction(const std::string& block, 
+        const std::string& name);
+    Type* findAlias(const std::string& block, const std::string& name);
+    std::pair<std::string, EnumDeclaration*> findEnum(const std::string& block, 
+        const std::string& name);
+    // ... and more
+};
+```
+
+### Function Visibility
+
+Functions can be marked as public or private using attributes:
+
+```cpp
+struct FunctionDetails {
+    std::string name;
+    FunctionSignature sig;
+    std::vector<Attribute> attributes;
+    
+    bool is_private() const {
+        return attributes.end() == std::ranges::find_if(attributes, 
+            [](const auto& attr) { return attr.name == "public"; });
+    }
+};
+```
+
+## Loading Source Modules
+
+Source modules are written in Yoyo and loaded from files or strings.
+
+### LLVM Engine
+
+```cpp
+void addModule(const std::string& module_name, std::string source);
+```
+
+<CodeGroup>
+  ```cpp From File
+  #include <llvm/llvm_engine.h>
+  #include <fstream>
+  #include <sstream>
+
+  Yoyo::LLVMEngine engine;
+
+  // Read source file
+  std::ifstream file("math_utils.yoyo");
+  std::ostringstream buffer;
+  buffer << file.rdbuf();
+  std::string source = buffer.str();
+
+  // Load module
+  engine.addModule("math_utils", source);
+  ```
+
+  ```cpp From String
+  #include <llvm/llvm_engine.h>
+
+  Yoyo::LLVMEngine engine;
+
+  std::string source = R"(
+      @[public]
+      factorial: fn(n: i32) -> i32 = {
+          if n <= 1 { return 1; }
+          return n * factorial(n - 1);
+      }
+  )";
+
+  engine.addModule("math", source);
+  ```
+</CodeGroup>
+
+### YVM Engine
+
+```cpp
+ModuleBase* addModule(const std::string& module_name, std::string source);
+```
+
+```cpp
+#include <yvm/yvm_engine.h>
+
+Yoyo::YVMEngine engine;
+
+std::string source = R"(
+    @[public]
+    greet: fn(name: &str) -> void = {
+        print("Hello, " + name + "!");
+    }
+)";
+
+auto* module = engine.addModule("greeter", source);
+
+// Use the returned module pointer for function lookup
+if (module) {
+    std::cout << "Module loaded: " << module->module_hash << std::endl;
+}
+```
+
+<Note>
+The YVM engine returns a pointer to the created module, while LLVM's `addModule` returns void. This difference allows immediate access to module metadata in YVM.
+</Note>
+
+## Application Modules
+
+Application modules expose C++ functions, types, and enums to Yoyo scripts.
+
+### Creating Application Modules
+
+<CodeGroup>
+  ```cpp LLVM
+  #include <llvm/llvm_engine.h>
+  #include <llvm/app_module.h>
+
+  Yoyo::LLVMEngine engine;
+  auto* app_mod = engine.addAppModule("myapp");
+  ```
+
+  ```cpp YVM
+  #include <yvm/yvm_engine.h>
+  #include <yvm/app_module.h>
+
+  Yoyo::YVMEngine engine;
+  auto* app_mod = engine.addAppModule("myapp");
+  ```
+</CodeGroup>
+
+Both return a pointer to the application module:
+- `LLVMAppModule*` for LLVM backend
+- `YVMAppModule*` for YVM backend
+
+### Adding Functions
+
+Application modules provide a type-safe template interface for registering C++ functions:
+
+```cpp
+template<typename R, typename... Args>
+Result addFunction(std::string sig_str, R(*func)(Args...), std::string name);
+```
+
+<ParamField path="sig_str" type="std::string" required>
+  Yoyo function signature string (e.g., `"(x: i32, y: i32) -> i32"`)
+</ParamField>
+
+<ParamField path="func" type="R(*)(Args...)" required>
+  Function pointer to the C++ function
+</ParamField>
+
+<ParamField path="name" type="std::string" required>
+  Name the function will have in Yoyo
+</ParamField>
+
+**Returns**: `Result` enum indicating success or error type
+
+#### Result Types
+
+```cpp
+enum class Result {
+    Success,
+    NullParameter,
+    InvalidSignature,
+    ParameterCountMismatch,
+    ReturnTypeMismatch,
+    ParameterTypeMismatch,
+    DuplicateEnumValue,
+};
+```
+
+### Function Registration Examples
+
+<CodeGroup>
+  ```cpp Simple Function
+  int32_t add(int32_t a, int32_t b) {
+      return a + b;
+  }
+
+  auto* app_mod = engine.addAppModule("math");
+  auto result = app_mod->addFunction(
+      "(a: i32, b: i32) -> i32",
+      add,
+      "add"
+  );
+
+  if (result != Yoyo::Result::Success) {
+      std::cerr << "Failed to register function" << std::endl;
+  }
+  ```
+
+  ```cpp String Parameters
+  void print_message(void* str) {
+      auto message = Yoyo::Engine::viewString(str);
+      std::cout << message << std::endl;
+  }
+
+  app_mod->addFunction(
+      "(msg: &str) -> void",
+      print_message,
+      "print"
+  );
+  ```
+
+  ```cpp Lambda Functions
+  app_mod->addFunction(
+      "() -> i32",
+      +[]() -> int32_t { return 42; },
+      "get_answer"
+  );
+  ```
+
+  ```cpp Multiple Return Values (via out parameter)
+  void get_string(void* out) {
+      struct YoyoString {
+          char* text;
+          uint64_t size;
+          uint64_t capacity;
+      };
+      
+      auto* str = reinterpret_cast<YoyoString*>(out);
+      const char* msg = "Hello from C++";
+      str->size = strlen(msg);
+      str->capacity = str->size;
+      str->text = static_cast<char*>(malloc(str->size));
+      strcpy(str->text, msg);
+  }
+
+  app_mod->addFunction(
+      "() -> str",
+      get_string,
+      "get_string"
+  );
+  ```
+</CodeGroup>
+
+### Type Mapping
+
+Yoyo types map to C++ types as follows:
+
+| Yoyo Type | C++ Type | Notes |
+|-----------|----------|-------|
+| `i8` | `int8_t` | 8-bit signed integer |
+| `i16` | `int16_t` | 16-bit signed integer |
+| `i32` | `int32_t` | 32-bit signed integer |
+| `i64` | `int64_t` | 64-bit signed integer |
+| `u8` | `uint8_t` | 8-bit unsigned integer |
+| `u16` | `uint16_t` | 16-bit unsigned integer |
+| `u32` | `uint32_t` | 32-bit unsigned integer |
+| `u64` | `uint64_t` | 64-bit unsigned integer |
+| `f32` | `float` | 32-bit floating point |
+| `f64` | `double` | 64-bit floating point |
+| `bool` | `bool` | Boolean |
+| `&str` | `void*` | String reference (use `Engine::viewString()`) |
+| `str` | `void*` | Owned string (use struct layout) |
+| `void` | `void` | No return value |
+
+<Warning>
+String types (`str`, `&str`) are passed as `void*` pointers to the internal string structure. Always use `Engine::viewString()` to safely access string data.
+</Warning>
+
+### Adding Enums
+
+```cpp
+Result addEnum(std::string enum_name, 
+               std::unordered_map<std::string, int32_t> values);
+```
+
+```cpp
+auto* app_mod = engine.addAppModule("ui");
+
+app_mod->addEnum("Color", {
+    {"Red", 0},
+    {"Green", 1},
+    {"Blue", 2},
+    {"Yellow", 3}
+});
+```
+
+Usage in Yoyo:
+```yoyo
+import ui
+
+current_color: ui::Color = ui::Color::Red;
+```
+
+### Adding Classes
+
+```cpp
+Result addClass(std::string class_name, 
+                std::vector<ClassVariable> variables, 
+                Ownership sh, 
+                std::string block_hash);
+```
+
+<Warning>
+Class registration is an advanced feature. Most use cases are better served by passing primitive types and strings between C++ and Yoyo.
+</Warning>
+
+## Module Compilation Workflow
+
+<Steps>
+  <Step title="Create Engine">
+    Instantiate the appropriate engine (LLVM or YVM)
+
+    ```cpp
+    Yoyo::YVMEngine engine;
+    ```
+  </Step>
+
+  <Step title="Add Application Modules">
+    Create app modules and register C++ functions
+
+    ```cpp
+    auto* app_mod = engine.addAppModule("myapp");
+    app_mod->addFunction("(x: i32) -> void", print_int, "print_int");
+    ```
+  </Step>
+
+  <Step title="Load Source Modules">
+    Add Yoyo source code modules
+
+    ```cpp
+    std::string source = /* load from file */;
+    auto* mod = engine.addModule("main", source);
+    ```
+  </Step>
+
+  <Step title="Link External Libraries (Optional)">
+    Add shared libraries for FFI
+
+    ```cpp
+    engine.addDynamicLibrary("libmath.so");
+    ```
+  </Step>
+
+  <Step title="Compile">
+    Compile all modules
+
+    ```cpp
+    if (!engine.compile()) {
+        std::cerr << "Compilation failed" << std::endl;
+        return 1;
+    }
+    ```
+  </Step>
+
+  <Step title="Prepare for Execution">
+    Link modules and initialize runtime
+
+    ```cpp
+    engine.prepareForExecution();
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+```cpp
+#include <yvm/yvm_engine.h>
+#include <yvm/app_module.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
+// C++ functions to expose
+int32_t multiply(int32_t a, int32_t b) {
+    return a * b;
+}
+
+void log_message(void* msg) {
+    auto view = Yoyo::Engine::viewString(msg);
+    std::cout << "[LOG] " << view << std::endl;
+}
+
+int main() {
+    Yoyo::YVMEngine engine;
+    
+    // Create application module
+    auto* app_mod = engine.addAppModule("native");
+    
+    app_mod->addFunction("(a: i32, b: i32) -> i32", multiply, "multiply");
+    app_mod->addFunction("(msg: &str) -> void", log_message, "log");
+    
+    app_mod->addEnum("Status", {
+        {"Success", 0},
+        {"Error", 1},
+        {"Pending", 2}
+    });
+    
+    // Load Yoyo source
+    std::string source = R"(
+        import native
+        
+        @[public]
+        test_multiply: fn() -> void = {
+            result: i32 = native::multiply(6, 7);
+            native::log("Result: " + result.to_string());
+        }
+        
+        main: fn() = {
+            test_multiply();
+            status: native::Status = native::Status::Success;
+        }
+    )";
+    
+    auto* mod = engine.addModule("main", source);
+    
+    // Compile and execute
+    if (engine.compile()) {
+        engine.prepareForExecution();
+        
+        auto main_fn = engine.findFunction(mod, mod->module_hash + "main");
+        if (main_fn) {
+            auto fiber = engine.createFiber(*main_fn);
+            engine.execute();
+        }
+    }
+    
+    return 0;
+}
+```
+
+Output:
+```
+[LOG] Result: 42
+```
+
+## Module Discovery
+
+After loading modules, you can inspect them:
+
+```cpp
+// Iterate over all modules
+for (const auto& [name, module] : engine.modules) {
+    std::cout << "Module: " << name << std::endl;
+    std::cout << "Hash: " << module->module_hash << std::endl;
+    
+    // List functions
+    for (const auto& [hash, func_list] : module->functions) {
+        for (const auto& func : func_list) {
+            std::cout << "  Function: " << func.name;
+            if (func.is_private()) {
+                std::cout << " (private)";
+            }
+            std::cout << std::endl;
+        }
+    }
+}
+```
+
+## Error Handling
+
+<CodeGroup>
+  ```cpp Check Function Registration
+  auto result = app_mod->addFunction(
+      "(x: i32) -> void",
+      my_func,
+      "my_func"
+  );
+
+  switch (result) {
+      case Yoyo::Result::Success:
+          std::cout << "Function registered successfully" << std::endl;
+          break;
+      case Yoyo::Result::InvalidSignature:
+          std::cerr << "Invalid function signature" << std::endl;
+          break;
+      case Yoyo::Result::ParameterCountMismatch:
+          std::cerr << "Parameter count doesn't match signature" << std::endl;
+          break;
+      default:
+          std::cerr << "Unknown error" << std::endl;
+  }
+  ```
+
+  ```cpp Check Compilation
+  bool success = engine.compile();
+  if (!success) {
+      std::cerr << "Compilation failed" << std::endl;
+      std::cerr << "Check syntax and type errors in your Yoyo code" << std::endl;
+      return 1;
+  }
+  ```
+</CodeGroup>
+
+## Best Practices
+
+<Tip>
+1. **Module Organization**: Create separate app modules for different subsystems (e.g., `io`, `math`, `graphics`)
+2. **Type Safety**: Always verify function registration results
+3. **Naming**: Use descriptive module names that won't conflict with Yoyo standard library
+4. **Documentation**: Document your app module functions for Yoyo script authors
+5. **Error Handling**: Validate inputs in C++ functions before processing
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="C++ Interop" icon="link" href="/embedding/interop">
+    Deep dive into C++ and Yoyo interoperability
+  </Card>
+  <Card title="Engine Configuration" icon="gear" href="/embedding/engine">
+    Advanced engine configuration and optimization
+  </Card>
+</CardGroup>

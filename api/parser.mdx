@@ -1,0 +1,466 @@
+---
+title: 'Parser'
+description: 'Parse Yoyo source code into abstract syntax trees'
+---
+
+The `Parser` class transforms Yoyo source code into an abstract syntax tree (AST) that can be compiled and executed by the engine.
+
+## Class Definition
+
+```cpp
+class YOYO_API Parser
+{
+public:
+    explicit Parser(std::string& source);
+    std::unique_ptr<ASTNode> parseExpressionOrDeclaration();
+    std::unique_ptr<Expression> parseExpression(uint32_t precedence);
+    std::unique_ptr<Statement> parseStatement();
+    std::vector<std::unique_ptr<Statement>> parseProgram();
+    [[nodiscard]] bool failed() const;
+    // ... additional methods
+};
+```
+
+## Constructor
+
+### Parser()
+
+Creates a parser instance for the given source code.
+
+```cpp
+explicit Parser(std::string& source);
+```
+
+#### Parameters
+
+<ParamField path="source" type="std::string&" required>
+  Reference to the Yoyo source code string. The reference must remain valid for the lifetime of the parser.
+</ParamField>
+
+#### Example
+
+```cpp
+#include <yoyo/parser.h>
+
+std::string code = "fn add(a: i32, b: i32) -> i32 { return a + b; }";
+Yoyo::Parser parser(code);
+```
+
+## Primary Parsing Methods
+
+### parseProgram()
+
+Parses an entire Yoyo program, returning a vector of top-level statements.
+
+```cpp
+std::vector<std::unique_ptr<Statement>> parseProgram();
+```
+
+#### Returns
+
+<ResponseField name="return" type="std::vector<std::unique_ptr<Statement>>">
+  Vector of parsed top-level statements representing the complete program
+</ResponseField>
+
+<Note>
+After calling this method, always check `failed()` to ensure parsing succeeded before using the results.
+</Note>
+
+#### Example
+
+```cpp
+#include <yoyo/parser.h>
+#include <iostream>
+
+std::string source = R"(
+    fn factorial(n: i32) -> i32 {
+        if n <= 1 { return 1; }
+        return n * factorial(n - 1);
+    }
+)";
+
+Yoyo::Parser parser(source);
+auto statements = parser.parseProgram();
+
+if (parser.failed()) {
+    std::cerr << "Parse error occurred" << std::endl;
+} else {
+    std::cout << "Successfully parsed " << statements.size() << " statements" << std::endl;
+}
+```
+
+---
+
+### parseExpression()
+
+Parses a single expression with the specified precedence level.
+
+```cpp
+std::unique_ptr<Expression> parseExpression(uint32_t precedence);
+```
+
+#### Parameters
+
+<ParamField path="precedence" type="uint32_t" required>
+  Minimum precedence level for operator parsing. Use 0 for lowest precedence (parse entire expression).
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::unique_ptr<Expression>">
+  Parsed expression AST node, or nullptr if parsing failed
+</ResponseField>
+
+#### Example
+
+```cpp
+std::string expr = "2 + 3 * 4";
+Yoyo::Parser parser(expr);
+auto expression = parser.parseExpression(0);
+
+if (!parser.failed()) {
+    // Expression successfully parsed
+    // Will respect operator precedence: 2 + (3 * 4)
+}
+```
+
+---
+
+### parseStatement()
+
+Parses a single statement from the source code.
+
+```cpp
+std::unique_ptr<Statement> parseStatement();
+```
+
+#### Returns
+
+<ResponseField name="return" type="std::unique_ptr<Statement>">
+  Parsed statement AST node, or nullptr if parsing failed
+</ResponseField>
+
+#### Example
+
+```cpp
+std::string stmt = "let x: i32 = 42;";
+Yoyo::Parser parser(stmt);
+auto statement = parser.parseStatement();
+
+if (!parser.failed()) {
+    // Statement successfully parsed
+}
+```
+
+---
+
+### parseExpressionOrDeclaration()
+
+Parses either an expression or a declaration, automatically detecting which one is present.
+
+```cpp
+std::unique_ptr<ASTNode> parseExpressionOrDeclaration();
+```
+
+#### Returns
+
+<ResponseField name="return" type="std::unique_ptr<ASTNode>">
+  Parsed AST node (either Expression or Statement/Declaration)
+</ResponseField>
+
+#### Example
+
+```cpp
+std::string code1 = "let x = 10;";
+std::string code2 = "x + 5";
+
+Yoyo::Parser parser1(code1);
+auto node1 = parser1.parseExpressionOrDeclaration();  // Declaration
+
+Yoyo::Parser parser2(code2);
+auto node2 = parser2.parseExpressionOrDeclaration();  // Expression
+```
+
+## Declaration Parsing Methods
+
+### parseVariableDeclaration()
+
+Parses a variable declaration statement.
+
+```cpp
+std::unique_ptr<Statement> parseVariableDeclaration(Token identifier);
+```
+
+#### Parameters
+
+<ParamField path="identifier" type="Token" required>
+  The identifier token for the variable name
+</ParamField>
+
+---
+
+### parseEnumDeclaration()
+
+Parses an enumeration declaration.
+
+```cpp
+std::unique_ptr<Statement> parseEnumDeclaration(Token identifier);
+```
+
+#### Parameters
+
+<ParamField path="identifier" type="Token" required>
+  The identifier token for the enum name
+</ParamField>
+
+---
+
+### parseConstDeclaration()
+
+Parses a constant declaration.
+
+```cpp
+std::unique_ptr<Statement> parseConstDeclaration(Token identifier);
+```
+
+#### Parameters
+
+<ParamField path="identifier" type="Token" required>
+  The identifier token for the constant name
+</ParamField>
+
+---
+
+### parseClassDeclaration()
+
+Parses a class declaration.
+
+```cpp
+std::unique_ptr<Statement> parseClassDeclaration(Token identifier, bool isGeneric);
+```
+
+#### Parameters
+
+<ParamField path="identifier" type="Token" required>
+  The identifier token for the class name
+</ParamField>
+
+<ParamField path="isGeneric" type="bool" required>
+  Whether the class is a generic class declaration
+</ParamField>
+
+---
+
+### parseInterfaceDeclaration()
+
+Parses an interface declaration.
+
+```cpp
+std::unique_ptr<Statement> parseInterfaceDeclaration(Token identifier);
+```
+
+#### Parameters
+
+<ParamField path="identifier" type="Token" required>
+  The identifier token for the interface name
+</ParamField>
+
+---
+
+### parseUnionDeclaration()
+
+Parses a union type declaration.
+
+```cpp
+std::unique_ptr<Statement> parseUnionDeclaration(Token identifier);
+```
+
+#### Parameters
+
+<ParamField path="identifier" type="Token" required>
+  The identifier token for the union name
+</ParamField>
+
+## Control Flow Parsing
+
+### parseForStatement()
+
+Parses a for loop statement.
+
+```cpp
+std::unique_ptr<Statement> parseForStatement(Token token);
+```
+
+#### Parameters
+
+<ParamField path="token" type="Token" required>
+  The 'for' keyword token
+</ParamField>
+
+---
+
+### parseWhileStatement()
+
+Parses a while loop statement.
+
+```cpp
+std::unique_ptr<Statement> parseWhileStatement(Token token);
+```
+
+#### Parameters
+
+<ParamField path="token" type="Token" required>
+  The 'while' keyword token
+</ParamField>
+
+---
+
+### parseReturnStatement()
+
+Parses a return statement.
+
+```cpp
+std::unique_ptr<Statement> parseReturnStatement(Token token);
+```
+
+#### Parameters
+
+<ParamField path="token" type="Token" required>
+  The 'return' keyword token
+</ParamField>
+
+## Error Handling
+
+### failed()
+
+Checks if any parse errors occurred.
+
+```cpp
+[[nodiscard]] bool failed() const;
+```
+
+#### Returns
+
+<ResponseField name="return" type="bool">
+  `true` if parsing encountered errors, `false` otherwise
+</ResponseField>
+
+<Note>
+The `[[nodiscard]]` attribute means the compiler will warn if you don't check the return value.
+</Note>
+
+#### Example
+
+```cpp
+Yoyo::Parser parser(source);
+auto program = parser.parseProgram();
+
+if (parser.failed()) {
+    std::cerr << "Parsing failed!" << std::endl;
+    return 1;
+}
+
+// Safe to use program
+```
+
+---
+
+### error()
+
+Reports a parse error with a message and optional token location.
+
+```cpp
+void error(std::string message, std::optional<Token> tk);
+```
+
+#### Parameters
+
+<ParamField path="message" type="std::string" required>
+  Error message describing what went wrong
+</ParamField>
+
+<ParamField path="tk" type="std::optional<Token>" required>
+  Optional token where the error occurred for location information
+</ParamField>
+
+## Utility Methods
+
+### parseType()
+
+Parses a type annotation with the given precedence.
+
+```cpp
+std::optional<Type> parseType(uint32_t precedence);
+```
+
+#### Parameters
+
+<ParamField path="precedence" type="uint32_t" required>
+  Precedence level for type parsing
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::optional<Type>">
+  Parsed type if successful, or `std::nullopt` if parsing failed
+</ResponseField>
+
+---
+
+### getSource()
+
+Gets a reference to the source code being parsed.
+
+```cpp
+const std::string& getSource() const;
+```
+
+#### Returns
+
+<ResponseField name="return" type="const std::string&">
+  Reference to the source code string
+</ResponseField>
+
+## Complete Usage Example
+
+```cpp
+#include <yoyo/parser.h>
+#include <yoyo/engine.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
+std::string loadFile(const std::string& filename) {
+    std::ifstream file(filename);
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+int main() {
+    // Load Yoyo source file
+    std::string source = loadFile("example.yy");
+    
+    // Create parser
+    Yoyo::Parser parser(source);
+    
+    // Parse the entire program
+    auto statements = parser.parseProgram();
+    
+    // Check for errors
+    if (parser.failed()) {
+        std::cerr << "Failed to parse program" << std::endl;
+        return 1;
+    }
+    
+    std::cout << "Successfully parsed " << statements.size() 
+              << " top-level statements" << std::endl;
+    
+    // You can now pass these statements to the Engine for execution
+    // MyEngine engine;
+    // engine.sources["main"] = {source, std::move(statements)};
+    // engine.execute();
+    
+    return 0;
+}
+```

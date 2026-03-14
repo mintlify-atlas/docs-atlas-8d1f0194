@@ -1,0 +1,743 @@
+---
+title: "YVM Backend"
+description: "Lightweight bytecode interpreter for fast compilation and portability"
+---
+
+## Overview
+
+The Yoyo Virtual Machine (YVM) backend compiles Yoyo code to bytecode for interpretation. It offers significantly faster compilation times than LLVM at the cost of some runtime performance.
+
+<Note>
+The YVM backend is ideal for development, scripting, and applications where fast startup time matters more than peak execution speed.
+</Note>
+
+## YVMEngine
+
+The execution engine for YVM bytecode.
+
+### Class Definition
+
+```cpp include/yoyo/yvm/yvm_engine.h
+namespace Yoyo {
+    class YVMEngine : public Engine {
+    public:
+        YVMEngine();
+        ~YVMEngine() override;
+        
+        // Module management
+        YVMAppModule* addAppModule(const std::string& name);
+        ModuleBase* addModule(const std::string& module_name, std::string source);
+        
+        // Compilation
+        bool compile();
+        void prepareForExecution();
+        
+        // External libraries
+        void addDynamicLibrary(std::string_view path);
+        
+        // Fiber management
+        Fiber createFiber(const FunctionTy& fn);
+        std::optional<FunctionTy> findFunction(
+            ModuleBase* mod,
+            const std::string& function_name
+        );
+        
+        // FFI
+        void* findNativeFunction(const std::string& name);
+        void* createGlobalConstant(
+            const Type& type,
+            const std::vector<Constant>& args,
+            IRGenerator*
+        ) override;
+        
+        // Type management
+        size_t getTypeSpawnIdx(const Type& tp);
+        
+        // VM and type managers
+        Yvm::VM vm;
+        StructTypeSelector struct_manager;
+        UniqueFISelector fi_manager;
+        UnionTypeSelector union_manager;
+        ArrayTypeSelector array_manager;
+        std::vector<NativeModule*> external_dlls;
+    };
+}
+```
+
+### Members
+
+<ResponseField name="vm" type="Yvm::VM">
+The bytecode virtual machine instance.
+</ResponseField>
+
+<ResponseField name="struct_manager" type="StructTypeSelector">
+Manages unique struct type layouts to avoid duplication.
+</ResponseField>
+
+<ResponseField name="fi_manager" type="UniqueFISelector">
+Manages function interface types for FFI calls.
+</ResponseField>
+
+<ResponseField name="union_manager" type="UnionTypeSelector">
+Manages union type layouts.
+</ResponseField>
+
+<ResponseField name="array_manager" type="ArrayTypeSelector">
+Manages fixed-size array types.
+</ResponseField>
+
+<ResponseField name="external_dlls" type="std::vector<NativeModule*>">
+Loaded dynamic libraries for FFI.
+</ResponseField>
+
+### Methods
+
+#### addAppModule
+
+```cpp
+YVMAppModule* addAppModule(const std::string& name);
+```
+
+Create a new application module for binding C++ functions to Yoyo.
+
+<ParamField path="name" type="const std::string&">
+The name of the module.
+</ParamField>
+
+**Returns:** Pointer to the created app module.
+
+#### compile
+
+```cpp
+bool compile();
+```
+
+Compile all added modules to YVM bytecode.
+
+**Returns:** `true` on success, `false` if compilation errors occurred.
+
+#### createFiber
+
+```cpp
+Fiber createFiber(const FunctionTy& fn);
+```
+
+Create a fiber (lightweight coroutine) for executing a function.
+
+<ParamField path="fn" type="const FunctionTy&">
+The function to execute in the fiber.
+</ParamField>
+
+**Returns:** A `Fiber` handle.
+
+#### findFunction
+
+```cpp
+std::optional<FunctionTy> findFunction(
+    ModuleBase* mod,
+    const std::string& function_name
+);
+```
+
+Look up a function by name in a module.
+
+<ParamField path="mod" type="ModuleBase*">
+The module to search.
+</ParamField>
+
+<ParamField path="function_name" type="const std::string&">
+Name of the function.
+</ParamField>
+
+**Returns:** `FunctionTy` if found, `std::nullopt` otherwise.
+
+### FunctionTy
+
+```cpp
+struct FunctionTy {
+    uint64_t* code;        // Pointer to bytecode
+    StructNativeTy* params; // Parameter types
+    NativeTy* ret;         // Return type
+    bool should_sret;      // Whether to use struct return
+};
+```
+
+Represents a compiled YVM function.
+
+## YVMIRGenerator
+
+Generates YVM bytecode from Yoyo AST nodes.
+
+### Class Definition
+
+```cpp include/yoyo/yvm/yvm_irgen.h
+namespace Yoyo {
+    class YVMIRGenerator : public IRGenerator {
+    public:
+        // YVM state
+        Yvm::Module* code;
+        std::unique_ptr<Yvm::Emitter> builder;
+        
+        struct VariableIndex {
+            enum IndexType { Alloc, Checkpoint };
+            size_t index;
+            IndexType type;
+        };
+        
+        struct VariableEntry {
+            VariableIndex idx;
+            Type type;
+        };
+        
+        std::vector<
+            std::vector<std::pair<std::string, VariableEntry>>
+        > variables;
+        
+        std::string break_to;
+        std::string continue_to;
+        
+        // Type conversion
+        NativeTy* toNativeType(const Type& type);
+        Yvm::Type toTypeEnum(const Type& type);
+        
+        // Scope management
+        void pushScope();
+        void popScope();
+        void callDestructors(size_t depth = 0);
+        
+        // IR generation
+        bool GenerateIR(
+            std::string_view name,
+            std::vector<std::unique_ptr<Statement>> statements,
+            YVMModule* md,
+            Engine* eng
+        );
+        
+        void doFunctionInternal(
+            std::string fn_name,
+            const FunctionSignature& sig,
+            FunctionDeclaration*
+        );
+        
+        // Override abstract methods
+        virtual std::optional<Type> getVariableType(
+            const std::string& name,
+            Expression*
+        ) override;
+        
+        virtual void doFunction(FunctionDeclaration*) override;
+        virtual void doClass(ClassDeclaration*) override;
+        virtual void doAlias(AliasDeclaration*) override;
+        virtual void doConst(ConstantDeclaration*) override;
+        
+        // Statement handlers
+        void operator()(FunctionDeclaration*);
+        void operator()(ClassDeclaration*);
+        void operator()(VariableDeclaration*);
+        void operator()(WhileStatement*);
+        void operator()(ForStatement*);
+        void operator()(ReturnStatement*);
+        void operator()(ExpressionStatement*);
+        void operator()(EnumDeclaration*);
+        void operator()(ModuleImport*);
+        void operator()(ConditionalExtraction*);
+        void operator()(WithStatement*);
+        void operator()(OperatorOverload*);
+        void operator()(GenericFunctionDeclaration*);
+        void operator()(AliasDeclaration*);
+        void operator()(GenericAliasDeclaration*);
+        void operator()(GenericClassDeclaration*);
+        void operator()(InterfaceDeclaration*);
+        void operator()(BreakStatement*);
+        void operator()(ContinueStatement*);
+        void operator()(ConstantDeclaration*);
+        void operator()(CImportDeclaration*);
+        void operator()(UnionDeclaration*);
+        void operator()(MacroDeclaration*);
+        void operator()(UsingStatement*);
+    };
+}
+```
+
+### Key Members
+
+<ResponseField name="builder" type="std::unique_ptr<Yvm::Emitter>">
+Bytecode emitter for generating YVM instructions.
+</ResponseField>
+
+<ResponseField name="variables" type="std::vector<std::vector<...>>">
+Scoped variable storage. Each entry contains:
+- Variable name (std::string)
+- Variable index and type (VariableEntry)
+</ResponseField>
+
+<ResponseField name="break_to" type="std::string">
+Label name to jump to for `break` statements.
+</ResponseField>
+
+<ResponseField name="continue_to" type="std::string">
+Label name to jump to for `continue` statements.
+</ResponseField>
+
+### VariableIndex
+
+```cpp
+struct VariableIndex {
+    enum IndexType { Alloc, Checkpoint };
+    size_t index;
+    IndexType type;
+};
+```
+
+Tracks variable storage location:
+- `Alloc`: Allocated stack slot
+- `Checkpoint`: Saved stack checkpoint position
+
+### Type Conversion Methods
+
+#### toNativeType
+
+```cpp
+NativeTy* toNativeType(const Type& type);
+```
+
+Convert a Yoyo type to a native FFI type for interop.
+
+<ParamField path="type" type="const Type&">
+The Yoyo type to convert.
+</ParamField>
+
+**Returns:** Pointer to the native type descriptor.
+
+#### toTypeEnum
+
+```cpp
+Yvm::Type toTypeEnum(const Type& type);
+```
+
+Convert a Yoyo type to a YVM type enum (for bytecode size annotations).
+
+<ParamField path="type" type="const Type&">
+The Yoyo type to convert.
+</ParamField>
+
+**Returns:** The YVM type enum value.
+
+## YVMExpressionEvaluator
+
+Evaluates expressions and emits bytecode.
+
+```cpp
+class YVMExpressionEvaluator {
+public:
+    YVMIRGenerator* irgen;
+    Type lastDeducedType;
+    size_t returned_alloc_addr;
+    bool returned_alloc_is_checkpoint = false;
+    
+    explicit YVMExpressionEvaluator(YVMIRGenerator* gen);
+    
+    // Type conversions and cloning
+    void implicitConvert(
+        Expression* xp,
+        const Type& from,
+        const Type& to,
+        bool on_stack,
+        bool perform_load
+    );
+    
+    void clone(
+        Expression* xp,
+        const Type& left_type,
+        bool on_stack,
+        bool perform_load
+    );
+    
+    void destroy(const Type& type) const;
+    void to_reference(const Type&);
+    
+    // Expression evaluation (returns types on stack)
+    std::vector<Type> operator()(IntegerLiteral*);
+    std::vector<Type> operator()(BooleanLiteral*);
+    std::vector<Type> operator()(StringLiteral*);
+    std::vector<Type> operator()(NameExpression*);
+    std::vector<Type> operator()(BinaryOperation*);
+    std::vector<Type> operator()(CallOperation*);
+    std::vector<Type> operator()(LambdaExpression*);
+    std::vector<Type> operator()(SpawnExpression*);
+    std::vector<Type> operator()(BlockExpression*);
+    std::vector<Type> operator()(IfExpression*);
+    // ... and more
+};
+```
+
+### Stack-Based Evaluation
+
+Unlike LLVM which uses SSA form, YVM uses a stack-based architecture:
+
+- Expressions push results onto the stack
+- `operator()` methods return `std::vector<Type>` describing what was pushed
+- `on_stack` parameter controls whether to use pre-allocated stack space
+- `perform_load` controls whether to output values or just addresses
+
+### Conversion Methods
+
+#### implicitConvert
+
+```cpp
+void implicitConvert(
+    Expression* xp,
+    const Type& from,
+    const Type& to,
+    bool on_stack,
+    bool perform_load
+);
+```
+
+Perform implicit type conversion.
+
+<ParamField path="xp" type="Expression*">
+Expression context for error reporting.
+</ParamField>
+
+<ParamField path="from" type="const Type&">
+Source type.
+</ParamField>
+
+<ParamField path="to" type="const Type&">
+Target type.
+</ParamField>
+
+<ParamField path="on_stack" type="bool">
+If true, write result to pre-allocated stack space.
+</ParamField>
+
+<ParamField path="perform_load" type="bool">
+If true, output a value; if false, output just the address.
+</ParamField>
+
+#### to_reference
+
+```cpp
+void to_reference(const Type& type);
+```
+
+Convert the object at the top of the stack to a reference (pointer).
+
+<ParamField path="type" type="const Type&">
+The type of the object.
+</ParamField>
+
+## Native Types
+
+YVM uses libffi for FFI compatibility.
+
+### Type Definitions
+
+```cpp include/yoyo/yvm/native_type.h
+namespace Yoyo {
+    using NativeTy = ffi_type;
+    
+    struct StructNativeTy : public NativeTy {
+        std::vector<size_t> offsets;
+    };
+    
+    struct ArrayNativeTy : public NativeTy {
+        size_t original_size;
+    };
+    
+    struct UnionNativeTy : public NativeTy {};
+    
+    struct NativeProto : public ffi_cif {
+        std::vector<NativeTy*> args;
+    };
+}
+```
+
+### NativeType Namespace
+
+Provides functions for creating and manipulating native types:
+
+```cpp
+namespace NativeType {
+    // Primitive types
+    NativeTy* getI8();
+    NativeTy* getI16();
+    NativeTy* getI32();
+    NativeTy* getI64();
+    NativeTy* getU8();
+    NativeTy* getU16();
+    NativeTy* getU32();
+    NativeTy* getU64();
+    NativeTy* getF32();
+    NativeTy* getF64();
+    NativeTy* getPtrTy();
+    NativeTy* getVoid();
+    
+    // Composite types
+    StructNativeTy* makeForStruct(std::span<NativeTy* const>);
+    UnionNativeTy* makeForUnion(std::span<NativeTy* const>);
+    ArrayNativeTy* makeForArray(NativeTy* type, size_t size);
+    
+    // Type queries
+    size_t getElementOffset(const StructNativeTy* type, size_t idx);
+    NativeTy* getStructElementType(StructNativeTy* type, size_t idx);
+    size_t getNumElements(const StructNativeTy* type);
+    uint32_t get_size(NativeTy* const);
+    uint32_t get_align(NativeTy* const);
+    
+    // Memory management
+    void freeForStruct(StructNativeTy*);
+    void freeForUnion(UnionNativeTy*);
+    
+    // FFI
+    NativeProto* get_proto_for(std::vector<NativeTy*>, NativeTy*);
+    void destroy_proto(NativeProto*);
+    Yvm::VM::Type doCall(
+        NativeProto* proto,
+        size_t nargs,
+        Yvm::VM::Type* args,
+        void* function
+    );
+    
+    // Dynamic libraries
+    NativeModule* load_native_library(const std::string& lib_name);
+    void* get_library_fn(NativeModule* module, const std::string& fn_name);
+    void free_native_library(NativeModule*);
+}
+```
+
+## YVMAppModule
+
+Extends `YVMModule` with FFI capabilities for binding C++ functions.
+
+```cpp include/yoyo/yvm/app_module.h
+namespace Yoyo {
+    class YVMAppModule : public YVMModule {
+    public:
+        template<typename R, typename... Args>
+        Result addFunction(
+            std::string sig_str,
+            R(*func)(Args...),
+            std::string name
+        );
+        
+        Result addEnum(
+            std::string enum_name,
+            std::unordered_map<std::string, int32_t> values
+        );
+        
+        Result addClass(
+            std::string class_name,
+            std::vector<ClassVariable> variables,
+            Ownership sh,
+            std::string block_hash
+        );
+    };
+}
+```
+
+### addFunction
+
+```cpp
+template<typename R, typename... Args>
+Result addFunction(
+    std::string sig_str,
+    R(*func)(Args...),
+    std::string name
+);
+```
+
+Bind a C++ function to make it callable from Yoyo code.
+
+<ParamField path="sig_str" type="std::string">
+Yoyo function signature string.
+</ParamField>
+
+<ParamField path="func" type="R(*)(Args...)">
+C++ function pointer.
+</ParamField>
+
+<ParamField path="name" type="std::string">
+Name to expose in Yoyo.
+</ParamField>
+
+**Returns:** `Result` indicating success or specific error.
+
+**Example:**
+```cpp
+void print_number(int32_t n) {
+    std::cout << n << std::endl;
+}
+
+YVMEngine engine;
+auto* app = engine.addAppModule("io");
+
+app->addFunction(
+    "fn print(n: i32) -> void",
+    &print_number,
+    "print"
+);
+```
+
+## YVMModule
+
+YVM-specific module implementation.
+
+```cpp include/yoyo/yvm/yvm_module.h
+namespace Yoyo {
+    struct YVMModule : public ModuleBase {
+        Yvm::Module code;
+        
+        std::unordered_map<ClassDeclaration*, StructNativeTy*> classes_types;
+        std::unordered_map<UnionDeclaration*, StructNativeTy*> union_types;
+        std::unordered_map<
+            std::string,
+            std::pair<StructNativeTy*, std::unique_ptr<LambdaExpression>>
+        > lambdas;
+        
+        NativeTy* toNativeType(
+            const Type& type,
+            const std::string& hash,
+            IRGenerator*,
+            const std::vector<Type>& disallowed_types
+        );
+        
+        std::string dumpIR();
+    };
+}
+```
+
+### dumpIR
+
+```cpp
+std::string dumpIR();
+```
+
+Return a string representation of the generated bytecode for debugging.
+
+**Returns:** Disassembled bytecode as a string.
+
+## Usage Example
+
+```cpp
+#include <yoyo/yvm/yvm_engine.h>
+
+using namespace Yoyo;
+
+int main() {
+    // Create engine
+    YVMEngine engine;
+    
+    // Add Yoyo source code
+    std::string source = R"(
+        fn factorial(n: i32) -> i32 {
+            if n <= 1 {
+                return 1;
+            }
+            return n * factorial(n - 1);
+        }
+    )";
+    
+    auto* mod = engine.addModule("main", source);
+    
+    // Compile to bytecode
+    if (!engine.compile()) {
+        std::cerr << "Compilation failed" << std::endl;
+        return 1;
+    }
+    
+    engine.prepareForExecution();
+    
+    // Find the function
+    auto fn_opt = engine.findFunction(mod, "factorial");
+    if (!fn_opt) {
+        std::cerr << "Function not found" << std::endl;
+        return 1;
+    }
+    
+    // Create a fiber and execute
+    Fiber fiber = engine.createFiber(fn_opt.value());
+    
+    // Call with argument 5
+    int32_t arg = 5;
+    int32_t result;
+    fiber.call(&arg, &result);
+    
+    std::cout << "factorial(5) = " << result << std::endl;
+    
+    return 0;
+}
+```
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Compilation" icon="rocket">
+    **Fast startup** - Bytecode generation is lightweight
+  </Card>
+  <Card title="Execution" icon="gauge">
+    **Good performance** - Efficient bytecode interpreter
+  </Card>
+  <Card title="Memory" icon="memory">
+    **Low usage** - No heavy compiler infrastructure
+  </Card>
+  <Card title="Portability" icon="globe">
+    **Highly portable** - Bytecode runs on any platform
+  </Card>
+</CardGroup>
+
+## LLVM vs YVM Comparison
+
+<Tabs>
+  <Tab title="Compilation Speed">
+    **YVM**: 10-100x faster compilation
+    
+    YVM generates bytecode directly from the AST, while LLVM performs multiple optimization passes.
+  </Tab>
+  <Tab title="Runtime Performance">
+    **LLVM**: 2-5x faster execution
+    
+    LLVM produces optimized native code, while YVM interprets bytecode.
+  </Tab>
+  <Tab title="Startup Time">
+    **YVM**: Near-instant
+    
+    Perfect for scripting and development workflows.
+  </Tab>
+  <Tab title="Memory Usage">
+    **YVM**: ~10MB overhead
+    
+    **LLVM**: ~50-100MB overhead
+    
+    YVM is more suitable for embedded scenarios.
+  </Tab>
+  <Tab title="Debugging">
+    **YVM**: Easier to debug with bytecode dumps
+    
+    **LLVM**: More complex but supports standard native debuggers
+  </Tab>
+</Tabs>
+
+## When to Use YVM
+
+<Check>Development and testing</Check>
+<Check>Scripting and automation</Check>
+<Check>Fast iteration cycles</Check>
+<Check>Embedded environments with limited memory</Check>
+<Check>Cross-platform bytecode distribution</Check>
+<Check>Applications where startup time is critical</Check>
+
+## When to Use LLVM
+
+<Check>Production deployments</Check>
+<Check>CPU-intensive workloads</Check>
+<Check>Long-running services</Check>
+<Check>Performance-critical code</Check>
+<Check>When you need maximum optimization</Check>
+
+## See Also
+
+- [IRGenerator](/api/ir-generator) - Base IR generator class
+- [LLVM Backend](/api/llvm-backend) - High-performance JIT alternative
+- [Engine](/api/engine) - Execution engine interface

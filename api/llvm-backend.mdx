@@ -1,0 +1,579 @@
+---
+title: "LLVM Backend"
+description: "JIT compilation backend using LLVM for high-performance code generation"
+---
+
+## Overview
+
+The LLVM backend provides Just-In-Time (JIT) compilation using LLVM infrastructure. It compiles Yoyo code to native machine code for maximum performance.
+
+<Note>
+The LLVM backend is recommended for production workloads and long-running applications where startup time is less critical than peak performance.
+</Note>
+
+## LLVMEngine
+
+The execution engine for LLVM-compiled code.
+
+### Class Definition
+
+```cpp include/yoyo/llvm/llvm_engine.h
+namespace Yoyo {
+    class LLVMEngine : public Engine {
+    public:
+        llvm::orc::ThreadSafeContext llvm_context;
+        std::unique_ptr<llvm::orc::LLJIT> jit;
+        
+        // Module management
+        LLVMAppModule* addAppModule(const std::string& name);
+        void addModule(const std::string& module_name, std::string source);
+        
+        // Compilation
+        void compile();
+        void prepareForExecution();
+        
+        // External libraries
+        void addStaticLibrary(std::string_view path);
+        void addDynamicLibrary(std::string_view path);
+        
+        // Constants
+        virtual void* createGlobalConstant(
+            const Type& type,
+            const std::vector<Constant>& args,
+            IRGenerator*
+        ) override;
+    };
+}
+```
+
+### Members
+
+<ResponseField name="llvm_context" type="llvm::orc::ThreadSafeContext">
+Thread-safe LLVM context for concurrent compilation.
+</ResponseField>
+
+<ResponseField name="jit" type="std::unique_ptr<llvm::orc::LLJIT>">
+LLVM Lazy JIT compiler instance.
+</ResponseField>
+
+### Methods
+
+#### addAppModule
+
+```cpp
+LLVMAppModule* addAppModule(const std::string& name);
+```
+
+Create a new application module for binding C++ functions to Yoyo.
+
+<ParamField path="name" type="const std::string&">
+The name of the module.
+</ParamField>
+
+**Returns:** Pointer to the created app module.
+
+**Example:**
+```cpp
+LLVMEngine engine;
+auto* app = engine.addAppModule("mylib");
+
+// Bind C++ function to Yoyo
+app->addFunction("fn add(x: i32, y: i32) -> i32", 
+                 &my_add_function, 
+                 "add");
+```
+
+#### compile
+
+```cpp
+void compile();
+```
+
+Compile all added modules to LLVM IR and prepare for JIT execution.
+
+#### addStaticLibrary
+
+```cpp
+void addStaticLibrary(std::string_view path);
+```
+
+Link a static library into the JIT runtime.
+
+<ParamField path="path" type="std::string_view">
+Path to the `.a` static library file.
+</ParamField>
+
+#### addDynamicLibrary
+
+```cpp
+void addDynamicLibrary(std::string_view path);
+```
+
+Load a dynamic library for use by JIT-compiled code.
+
+<ParamField path="path" type="std::string_view">
+Path to the `.so` or `.dll` dynamic library file.
+</ParamField>
+
+## LLVMIRGenerator
+
+Generates LLVM IR from Yoyo AST nodes.
+
+### Class Definition
+
+```cpp include/yoyo/llvm/llvm_irgen.h
+namespace Yoyo {
+    class LLVMIRGenerator : public IRGenerator {
+    public:
+        explicit LLVMIRGenerator(llvm::LLVMContext& ctx);
+        
+        // LLVM state
+        llvm::Value* currentReturnAddress;
+        llvm::BasicBlock* returnBlock;
+        llvm::LLVMContext& context;
+        llvm::Module* code;
+        std::unique_ptr<llvm::IRBuilder<>> builder;
+        
+        // Variable tracking
+        std::vector<std::unordered_map<
+            std::string,
+            std::tuple<llvm::Value*, Type, llvm::Value*>
+        >> variables;
+        
+        // Control flow
+        llvm::BasicBlock* break_to = nullptr;
+        llvm::BasicBlock* continue_to = nullptr;
+        
+        // Type conversion
+        llvm::Type* ToLLVMType(const Type& type, bool is_ref);
+        llvm::FunctionType* ToLLVMSignature(const FunctionSignature& sig);
+        
+        // Memory management
+        llvm::AllocaInst* Alloca(std::string_view name, llvm::Type* type);
+        llvm::Value* Malloc(std::string_view name, llvm::Value* size);
+        llvm::Value* GCMalloc(llvm::Value* size);
+        llvm::Value* GCMalloc(size_t size);
+        void Free(llvm::Value* value);
+        
+        // Scope management
+        void pushScope();
+        void popScope();
+        void callDestructors(size_t depth = 0);
+        
+        // Type operations
+        Type reduceLiteral(const Type& src, llvm::Value* val);
+        llvm::StructType* hanldeClassDeclaration(
+            std::span<const ClassVariable> vars,
+            Ownership own,
+            std::string_view name
+        );
+        
+        // IR generation
+        bool GenerateIR(
+            std::string_view name,
+            std::vector<std::unique_ptr<Statement>> statements,
+            LLModule* md,
+            Engine* eng
+        );
+        
+        // Override abstract methods
+        virtual std::optional<Type> getVariableType(
+            const std::string& name,
+            Expression*
+        ) override;
+        
+        virtual void doFunction(FunctionDeclaration*) override;
+        virtual void doClass(ClassDeclaration*) override;
+        virtual void doAlias(AliasDeclaration*) override;
+        
+        // Statement handlers
+        void operator()(FunctionDeclaration*);
+        void operator()(ClassDeclaration*);
+        void operator()(VariableDeclaration*);
+        void operator()(IfStatement*);
+        void operator()(WhileStatement*);
+        void operator()(ForStatement*);
+        void operator()(BlockStatement*);
+        void operator()(ReturnStatement*);
+        void operator()(ExpressionStatement*);
+        void operator()(EnumDeclaration*);
+        void operator()(ModuleImport*);
+        void operator()(ConditionalExtraction*);
+        void operator()(WithStatement*);
+        void operator()(OperatorOverload*);
+        void operator()(GenericFunctionDeclaration*);
+        void operator()(AliasDeclaration*);
+        void operator()(GenericAliasDeclaration*);
+        void operator()(GenericClassDeclaration*);
+        void operator()(InterfaceDeclaration*);
+        void operator()(BreakStatement*);
+        void operator()(ContinueStatement*);
+        void operator()(ConstantDeclaration*);
+        void operator()(CImportDeclaration*);
+        void operator()(UnionDeclaration*);
+        void operator()(MacroDeclaration*);
+    };
+}
+```
+
+### Key Members
+
+<ResponseField name="builder" type="std::unique_ptr<llvm::IRBuilder<>>">
+LLVM IR builder for emitting instructions.
+</ResponseField>
+
+<ResponseField name="variables" type="std::vector<std::unordered_map<...>>">
+Scoped variable storage. Each map contains:
+- Variable name
+- Stack allocation (llvm::Value*)
+- Yoyo type (Type)
+- Drop flag for RAII (llvm::Value*)
+</ResponseField>
+
+<ResponseField name="currentReturnAddress" type="llvm::Value*">
+Alloca for storing return values in functions.
+</ResponseField>
+
+<ResponseField name="returnBlock" type="llvm::BasicBlock*">
+Basic block to jump to when returning from a function.
+</ResponseField>
+
+### Type Conversion Methods
+
+#### ToLLVMType
+
+```cpp
+llvm::Type* ToLLVMType(const Type& type, bool is_ref);
+```
+
+Convert a Yoyo type to an LLVM type.
+
+<ParamField path="type" type="const Type&">
+The Yoyo type to convert.
+</ParamField>
+
+<ParamField path="is_ref" type="bool">
+Whether the type should be treated as a reference (pointer).
+</ParamField>
+
+**Returns:** The corresponding LLVM type.
+
+#### ToLLVMSignature
+
+```cpp
+llvm::FunctionType* ToLLVMSignature(const FunctionSignature& sig);
+```
+
+Convert a Yoyo function signature to an LLVM function type.
+
+### Memory Management
+
+#### Alloca
+
+```cpp
+llvm::AllocaInst* Alloca(std::string_view name, llvm::Type* type);
+```
+
+Allocate stack space for a variable.
+
+<ParamField path="name" type="std::string_view">
+Debug name for the allocation.
+</ParamField>
+
+<ParamField path="type" type="llvm::Type*">
+LLVM type to allocate.
+</ParamField>
+
+**Returns:** The stack allocation instruction.
+
+#### GCMalloc
+
+```cpp
+llvm::Value* GCMalloc(llvm::Value* size);
+llvm::Value* GCMalloc(size_t size);
+```
+
+Allocate garbage-collected heap memory.
+
+<ParamField path="size" type="llvm::Value* or size_t">
+Size in bytes to allocate (either as runtime value or compile-time constant).
+</ParamField>
+
+**Returns:** Pointer to the allocated memory.
+
+#### callDestructors
+
+```cpp
+void callDestructors(size_t depth = 0);
+```
+
+Call destructors for all variables in scopes from the current depth onwards. Used for RAII cleanup.
+
+## LLVMExpressionEvaluator
+
+Evaluates expressions and generates LLVM IR.
+
+```cpp
+class LLVMExpressionEvaluator {
+    LLVMIRGenerator* irgen;
+    std::optional<Type> target;
+    
+public:
+    Type lastDeducedType;
+    
+    explicit LLVMExpressionEvaluator(
+        LLVMIRGenerator* gen,
+        std::optional<Type> target = std::nullopt
+    );
+    
+    // Type conversions and cloning
+    llvm::Value* implicitConvert(
+        Expression* xp,
+        llvm::Value* val,
+        const Type& from,
+        const Type& to,
+        llvm::Value* into = nullptr
+    ) const;
+    
+    llvm::Value* clone(
+        Expression* xp,
+        llvm::Value* value,
+        const Type& left_type,
+        llvm::Value* into = nullptr
+    ) const;
+    
+    void destroy(llvm::Value* value, const Type& type) const;
+    
+    // Expression evaluation
+    llvm::Value* operator()(IntegerLiteral*);
+    llvm::Value* operator()(BooleanLiteral*);
+    llvm::Value* operator()(StringLiteral*);
+    llvm::Value* operator()(NameExpression*);
+    llvm::Value* operator()(BinaryOperation*);
+    llvm::Value* operator()(CallOperation*);
+    llvm::Value* operator()(LambdaExpression*);
+    // ... and more
+};
+```
+
+### Conversion Methods
+
+#### implicitConvert
+
+```cpp
+llvm::Value* implicitConvert(
+    Expression* xp,
+    llvm::Value* val,
+    const Type& from,
+    const Type& to,
+    llvm::Value* into = nullptr
+) const;
+```
+
+Perform implicit type conversion (e.g., i32 → i64, owned → reference).
+
+<ParamField path="xp" type="Expression*">
+Expression context for error reporting.
+</ParamField>
+
+<ParamField path="val" type="llvm::Value*">
+The value to convert.
+</ParamField>
+
+<ParamField path="from" type="const Type&">
+Source type.
+</ParamField>
+
+<ParamField path="to" type="const Type&">
+Target type.
+</ParamField>
+
+<ParamField path="into" type="llvm::Value*" default="nullptr">
+Optional pre-allocated destination.
+</ParamField>
+
+#### clone
+
+```cpp
+llvm::Value* clone(
+    Expression* xp,
+    llvm::Value* value,
+    const Type& left_type,
+    llvm::Value* into = nullptr
+) const;
+```
+
+Deep-copy a value (for owned types).
+
+## LLVMAppModule
+
+Extends `LLModule` with FFI capabilities for binding C++ functions.
+
+```cpp include/yoyo/llvm/app_module.h
+namespace Yoyo {
+    class LLVMAppModule : public LLModule {
+    public:
+        template<typename R, typename... Args>
+        Result addFunction(
+            std::string sig_str,
+            R(*func)(Args...),
+            std::string name
+        );
+        
+        Result addEnum(
+            std::string enum_name,
+            std::unordered_map<std::string, int32_t> values
+        );
+        
+        Result addClass(
+            std::string class_name,
+            std::vector<ClassVariable> variables,
+            Ownership sh,
+            std::string block_hash
+        );
+    };
+}
+```
+
+### addFunction
+
+```cpp
+template<typename R, typename... Args>
+Result addFunction(
+    std::string sig_str,
+    R(*func)(Args...),
+    std::string name
+);
+```
+
+Bind a C++ function to make it callable from Yoyo code.
+
+<ParamField path="sig_str" type="std::string">
+Yoyo function signature string (e.g., `"fn add(x: i32, y: i32) -> i32"`).
+</ParamField>
+
+<ParamField path="func" type="R(*)(Args...)">
+C++ function pointer.
+</ParamField>
+
+<ParamField path="name" type="std::string">
+Name to expose in Yoyo.
+</ParamField>
+
+**Returns:** `Result` indicating success or specific error.
+
+**Example:**
+```cpp
+int32_t add(int32_t a, int32_t b) {
+    return a + b;
+}
+
+LLVMEngine engine;
+auto* app = engine.addAppModule("math");
+
+Result res = app->addFunction(
+    "fn add(x: i32, y: i32) -> i32",
+    &add,
+    "add"
+);
+
+if (res == Result::Success) {
+    // Function is now callable from Yoyo
+}
+```
+
+## LLModule
+
+LLVM-specific module implementation.
+
+```cpp include/yoyo/llvm/llvm_module.h
+namespace Yoyo {
+    struct LLModule : public ModuleBase {
+        llvm::orc::ThreadSafeModule code;
+        
+        std::unordered_map<ClassDeclaration*, llvm::StructType*> classes_types;
+        std::unordered_map<UnionDeclaration*, llvm::StructType*> union_types;
+        std::unordered_map<
+            std::string,
+            std::pair<llvm::StructType*, std::unique_ptr<LambdaExpression>>
+        > lambdas;
+        
+        llvm::Type* ToLLVMType(
+            const Type& type,
+            const std::string& hash,
+            IRGenerator*,
+            const std::vector<Type>& disallowed_types
+        );
+        
+        void dumpIR();
+    };
+}
+```
+
+### dumpIR
+
+```cpp
+void dumpIR();
+```
+
+Print the generated LLVM IR to stdout for debugging.
+
+## Usage Example
+
+```cpp
+#include <yoyo/llvm/llvm_engine.h>
+
+using namespace Yoyo;
+
+int main() {
+    // Create engine
+    LLVMEngine engine;
+    
+    // Add Yoyo source code
+    std::string source = R"(
+        fn fibonacci(n: i32) -> i32 {
+            if n <= 1 {
+                return n;
+            }
+            return fibonacci(n - 1) + fibonacci(n - 2);
+        }
+    )";
+    
+    engine.addModule("main", source);
+    
+    // Compile to native code
+    engine.compile();
+    engine.prepareForExecution();
+    
+    // Find and call the function
+    auto* fib = engine.findFunction("fibonacci");
+    int32_t result = reinterpret_cast<int32_t(*)(int32_t)>(fib)(10);
+    
+    std::cout << "fibonacci(10) = " << result << std::endl;
+    
+    return 0;
+}
+```
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Compilation" icon="clock">
+    **Slower startup** - LLVM performs heavy optimization
+  </Card>
+  <Card title="Execution" icon="bolt">
+    **Peak performance** - Native machine code with optimizations
+  </Card>
+  <Card title="Memory" icon="memory">
+    **Higher usage** - Full LLVM infrastructure in memory
+  </Card>
+  <Card title="Code Size" icon="file">
+    **Optimized** - Dead code elimination and inlining
+  </Card>
+</CardGroup>
+
+## See Also
+
+- [IRGenerator](/api/ir-generator) - Base IR generator class
+- [YVM Backend](/api/yvm-backend) - Lightweight bytecode alternative
+- [Engine](/api/engine) - Execution engine interface

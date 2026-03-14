@@ -1,0 +1,789 @@
+---
+title: 'Type System'
+description: 'Constraint-based type inference with unification and domain analysis'
+icon: 'diagram-project'
+---
+
+## Overview
+
+Yoyo uses a **constraint-based type system** with Hindley-Milner-style inference extended for ownership types. The type checker generates constraints during AST traversal, then solves them using unification with domain narrowing.
+
+<Note>
+Type checking happens **before** borrow checking. The borrow checker consumes the fully-typed AST and converts it to its own IR.
+</Note>
+
+## Type Representation
+
+### Core Type Structure
+
+```cpp
+struct Type {
+    std::string name;              // "i32", "?0", "MyClass", etc.
+    std::vector<Type> params;      // For Vec<i32>, params = [i32]
+    std::string full_name() const; // "Vec<i32>"
+};
+```
+
+Type variables are represented as `"?0"`, `"?1"`, etc.
+
+### Function Types
+
+```cpp
+struct FunctionType : public Type {
+    std::vector<Type> args;        // Parameter types
+    Type return_type;              // Return type  
+    bool is_vararg;                // For C interop
+    Ownership ownership;           // Owned vs borrowed
+};
+```
+
+### Special Types
+
+<CardGroup cols={2}>
+<Card title="Type Variables" icon="question">
+`?0`, `?1`, `?2` - Unknown types to be inferred
+</Card>
+
+<Card title="Never Type" icon="circle-xmark">
+`void` - Functions that don't return (diverge)
+</Card>
+
+<Card title="Unit Type" icon="circle">
+`()` - Empty tuple, like void in other languages
+</Card>
+
+<Card title="Error Type" icon="triangle-exclamation">
+`__error_type` - Used when type checking fails
+</Card>
+</CardGroup>
+
+## Constraint Generation
+
+The type checker traverses the AST and generates constraints:
+
+### Constraint Types
+
+<AccordionGroup>
+<Accordion title="Basic Type Constraints">
+
+**IsIntegerConstraint** - Type must be i8/i16/i32/i64/u8/u16/u32/u64
+
+**IsFloatConstraint** - Type must be f32/f64
+
+**EqualConstraint** - Two types must be exactly equal
+
+```cpp
+struct EqualConstraint {
+    Type type1;
+    Type type2;
+    ASTNode* expr;  // For error reporting
+};
+```
+</Accordion>
+
+<Accordion title="Ownership Constraints">
+
+**OwningConstraint** - Type must have owning semantics (not a reference)
+
+**NonOwningConstraint** - Type must be a reference
+
+**IsReferenceToConstraint** - Type is `&T` or `&mut T` where inner is some other type
+
+```cpp
+struct IsReferenceToConstraint {
+    Type type;   // The reference type
+    Type other;  // The inner type
+    ASTNode* expr;
+};
+```
+</Accordion>
+
+<Accordion title="Operator Constraints">
+
+**BinaryOperableConstraint** - Binary operation is defined
+
+**HasUnaryMinusConstraint** - Unary minus is defined
+
+**ComparableConstraint** - Type implements comparison
+
+```cpp
+struct BinaryOperableConstraint {
+    Type left;
+    Type right;
+    Type result;
+    TokenType op;  // +, -, *, /, etc.
+    // Cache for generic instantiations
+    std::unordered_map<OperatorOverload*, 
+                       std::unordered_map<std::string, Type>> substitution_cache;
+    ASTNode* expr;
+};
+```
+</Accordion>
+
+<Accordion title="Function Constraints">
+
+**IsInvocableConstraint** - Type can be called as a function
+
+**ValidAsFunctionArgConstraint** - Type is compatible with function parameter
+
+**IsReturnOfConstraint** - Type matches function return type
+
+```cpp
+struct ValidAsFunctionArgConstraint {
+    Type type;      // Actual argument type
+    Type function;  // Function type
+    uint32_t arg_no; // Which parameter (0-based)
+    ASTNode* expr;
+};
+```
+</Accordion>
+
+<Accordion title="Struct/Interface Constraints">
+
+**HasFieldConstraint** - Type has a specific field
+
+**AllFieldsConstraint** - Type contains exactly these fields
+
+**ImplInterfaceConstraint** - Type implements an interface
+
+```cpp
+struct HasFieldConstraint {
+    Type subject;              // The struct type
+    std::string field_name;    // Field to look up
+    Type result;               // Field's type
+    ASTNode* expr;
+};
+```
+</Accordion>
+
+<Accordion title="Borrowing Constraints">
+
+**BorrowResultConstraint** - Result of borrowing (creates `&T`)
+
+**BorrowResultMutConstraint** - Result of mutable borrowing (`&mut T`)
+
+```cpp
+struct BorrowResultConstraint {
+    Type subject;  // What's being borrowed
+    Type result;   // The reference type
+    ASTNode* expr;
+    std::unordered_map<OperatorOverload*, 
+                       std::unordered_map<std::string, Type>> substitution_cache;
+};
+```
+</Accordion>
+
+<Accordion title="Advanced Constraints">
+
+**ConvertibleToConstraint** - Implicit conversion exists
+
+**ExtractsToConstraint** - Type can be pattern matched to extract inner type
+
+**AsConstraint** - Explicit cast is valid
+
+**IfEqualThenConstrain** - Conditional constraint application
+
+```cpp
+struct IfEqualThenConstrain {
+    Type type1;
+    Type type2;
+    std::vector<TypeCheckerConstraint> apply_if_true;
+};
+```
+</Accordion>
+</AccordionGroup>
+
+### Example: Integer Literal
+
+```cpp
+FunctionType TypeChecker::operator()(IntegerLiteral* lit) const {
+    Type fresh = state->new_type_var();  // Create ?0
+    
+    if (lit->is_negative) {
+        // Must be signed: i8, i16, i32, or i64
+        state->add_constraint(IsIntegerConstraint{ fresh, lit });
+        state->add_constraint(
+            CanStoreIntegerConstraint{ fresh, lit->value, lit }
+        );
+    } else {
+        // Can be any integer type
+        state->add_constraint(IsIntegerConstraint{ fresh, lit });
+        state->add_constraint(
+            CanStoreIntegerConstraint{ fresh, lit->value, lit }
+        );
+    }
+    
+    return FunctionType{ fresh };
+}
+```
+
+### Example: Binary Operation
+
+```cpp
+FunctionType TypeChecker::operator()(BinaryOperation* op) const {
+    // Infer operand types
+    Type left_ty = (*this)(op->left.get()).type;
+    Type right_ty = (*this)(op->right.get()).type;
+    
+    // Create result type variable
+    Type result_ty = state->new_type_var();
+    
+    // Constrain: left <op> right -> result
+    state->add_constraint(BinaryOperableConstraint{
+        left_ty, right_ty, result_ty, op->op, op
+    });
+    
+    return FunctionType{ result_ty };
+}
+```
+
+## Unification
+
+Unification makes two types equal by finding a substitution:
+
+### Union-Find Structure
+
+```cpp
+struct UnificationTable {
+    std::vector<uint32_t> parents;  // Union-find parents
+    std::vector<uint32_t> rank;     // For union by rank
+    std::unordered_map<uint32_t, Domain> domains;  // Type domains
+    
+    uint32_t find(uint32_t id) {
+        if (parents[id] != id)
+            parents[id] = find(parents[id]);  // Path compression
+        return parents[id];
+    }
+    
+    uint32_t unite(uint32_t id1, uint32_t id2, 
+                   IRGenerator* irgen, TypeCheckerState* state);
+};
+```
+
+<Steps>
+<Step title="Variable ID Extraction">
+
+Type variables are encoded as strings `"?0"`, `"?1"`. Convert to numeric IDs:
+
+```cpp
+uint32_t type_to_id(const Type& tp) {
+    uint32_t res;
+    auto [ptr, ec] = std::from_chars(
+        tp.name.c_str() + 1,  // Skip '?'
+        tp.name.c_str() + tp.name.size(), 
+        res
+    );
+    return res;
+}
+```
+</Step>
+
+<Step title="Find Root">
+
+Follow parent pointers to find the representative:
+
+```cpp
+uint32_t find(uint32_t id) {
+    if (parents[id] != id)
+        parents[id] = find(parents[id]);  // Compress path
+    return parents[id];
+}
+```
+</Step>
+
+<Step title="Union by Rank">
+
+Merge two equivalence classes:
+
+```cpp
+uint32_t unite(uint32_t id1, uint32_t id2, ...) {
+    uint32_t root1 = find(id1);
+    uint32_t root2 = find(id2);
+    
+    if (root1 == root2) return root1;  // Already unified
+    
+    // Union by rank
+    if (rank[root1] < rank[root2]) {
+        parents[root1] = root2;
+        return root2;
+    } else {
+        parents[root2] = root1;
+        if (rank[root1] == rank[root2]) rank[root1]++;
+        return root1;
+    }
+}
+```
+</Step>
+
+<Step title="Domain Merging">
+
+When unifying type variables, merge their domains:
+
+```cpp
+void unify_types(const Type& t1, const Type& t2, IRGenerator* irgen) {
+    if (t1.is_type_var() && t2.is_type_var()) {
+        uint32_t id1 = tbl.type_to_id(t1);
+        uint32_t id2 = tbl.type_to_id(t2);
+        tbl.unite(id1, id2, irgen, this);
+    } else if (t1.is_type_var()) {
+        // Bind ?0 = i32
+        Domain* dom = tbl.domain_of(tbl.type_to_id(t1));
+        dom->equal_constrain(t2);
+    } else if (t2.is_type_var()) {
+        Domain* dom = tbl.domain_of(tbl.type_to_id(t2));
+        dom->equal_constrain(t1);
+    } else {
+        // Both concrete - must be identical
+        if (t1.name != t2.name) error("Type mismatch");
+        // Recursively unify parameters
+        for (size_t i = 0; i < t1.params.size(); i++)
+            unify_types(t1.params[i], t2.params[i], irgen);
+    }
+}
+```
+</Step>
+</Steps>
+
+## Domain Narrowing
+
+Type variables have **domains** - sets of possible concrete types:
+
+```cpp
+class Domain {
+    bool is_infinite = true;  // Initially unconstrained
+public:
+    struct Group {
+        std::vector<Type> types;  // Possible types
+        void add_type(Type&&);
+    };
+    Group concrete_types;
+    
+    // Intersect with a new group of types
+    std::optional<Error> add_and_intersect(Group&&, TypeCheckerState*);
+    
+    // Solve to a single type
+    bool is_solved();
+    Type get_solution();
+};
+```
+
+### Narrowing Process
+
+<Tabs>
+<Tab title="Infinite Domain">
+
+Initially, type variables can be **any** type:
+
+```cpp
+Type tv = state->new_type_var();  // ?0 with infinite domain
+```
+</Tab>
+
+<Tab title="Add Constraint">
+
+Constraints narrow the domain:
+
+```cpp
+// ?0 must be an integer
+IsIntegerConstraint{ ?0, ... }
+
+// Domain is now: { i8, i16, i32, i64, u8, u16, u32, u64 }
+```
+</Tab>
+
+<Tab title="Intersect">
+
+Multiple constraints intersect:
+
+```cpp
+// ?0 must store value 1000
+CanStoreIntegerConstraint{ ?0, 1000, ... }
+
+// Domain is now: { i16, i32, i64, u16, u32, u64 }
+// (i8 and u8 can't hold 1000)
+```
+</Tab>
+
+<Tab title="Solve">
+
+When solving, pick the "best" type:
+
+```cpp
+Type solution = domain.get_solution();
+// Picks i32 (default integer type)
+```
+</Tab>
+</Tabs>
+
+### Integer Domain Example
+
+```cpp
+std::optional<Error> Domain::constrain_to_store(int64_t value) {
+    Group g;
+    
+    if (value >= INT8_MIN && value <= INT8_MAX)
+        g.types.push_back(Type{"i8"});
+    if (value >= INT16_MIN && value <= INT16_MAX)
+        g.types.push_back(Type{"i16"});
+    if (value >= INT32_MIN && value <= INT32_MAX)
+        g.types.push_back(Type{"i32"});
+    g.types.push_back(Type{"i64"});  // Always fits
+    
+    if (value >= 0) {
+        if (value <= UINT8_MAX) g.types.push_back(Type{"u8"});
+        if (value <= UINT16_MAX) g.types.push_back(Type{"u16"});
+        if (value <= UINT32_MAX) g.types.push_back(Type{"u32"});
+        g.types.push_back(Type{"u64"});
+    }
+    
+    return add_and_intersect(std::move(g), state);
+}
+```
+
+## Constraint Solving
+
+The `ConstraintSolver` processes constraints iteratively:
+
+```cpp
+struct ConstraintSolver {
+    bool has_error;
+    IRGenerator* irgen;
+    TypeCheckerState* state;
+    std::vector<TypeCheckerConstraint> temp_constraints;
+    
+    // Returns true if constraint is satisfied and can be removed
+    bool operator()(EqualConstraint& con);
+    bool operator()(BinaryOperableConstraint& con);
+    // ... one method per constraint type
+};
+```
+
+### Solving Algorithm
+
+<Steps>
+<Step title="Initialize">
+
+Generate all constraints from the AST:
+
+```cpp
+void TypeCheckerState::resolve_function(
+    FunctionDeclaration* decl,
+    IRGenerator* irgen,
+    const FunctionSignature& sig
+) {
+    TypeChecker checker{ target, irgen, this, false };
+    
+    // Generate constraints
+    for (auto& stmt : decl->body)
+        std::visit(checker, stmt->get_variant());
+}
+```
+</Step>
+
+<Step title="Iterate">
+
+Repeatedly process constraints until fixed point:
+
+```cpp
+while (!constraints.empty()) {
+    ConstraintSolver solver{ false, irgen, this };
+    
+    // Try to solve each constraint
+    std::vector<TypeCheckerConstraint> unsolved;
+    for (auto& con : constraints) {
+        bool satisfied = std::visit(solver, con);
+        if (!satisfied)
+            unsolved.push_back(std::move(con));
+    }
+    
+    // Add new constraints generated during solving
+    constraints = std::move(unsolved);
+    constraints.insert(constraints.end(),
+                      solver.temp_constraints.begin(),
+                      solver.temp_constraints.end());
+    
+    if (solver.has_error) break;
+}
+```
+</Step>
+
+<Step title="Unification">
+
+Equal constraints trigger unification:
+
+```cpp
+bool ConstraintSolver::operator()(EqualConstraint& con) {
+    Type t1 = state->best_repr(con.type1);
+    Type t2 = state->best_repr(con.type2);
+    
+    if (t1 == t2) return true;  // Already equal
+    
+    if (t1.is_type_var() || t2.is_type_var()) {
+        state->unify_types(t1, t2, irgen);
+        return false;  // Keep checking
+    }
+    
+    // Both concrete and different - error!
+    has_error = true;
+    irgen->error(Error{
+        .message = "Type mismatch",
+        .location = con.expr->location
+    });
+    return true;
+}
+```
+</Step>
+
+<Step title="Operator Resolution">
+
+Binary operators may require overload resolution:
+
+```cpp
+bool ConstraintSolver::operator()(BinaryOperableConstraint& con) {
+    Type left = state->best_repr(con.left);
+    Type right = state->best_repr(con.right);
+    
+    // Check for built-in operator
+    if (is_builtin_operator(left, right, con.op)) {
+        // Unify result with expected type
+        add_new_constraint(EqualConstraint{
+            con.result, builtin_result_type(left, right, con.op), con.expr
+        });
+        return true;
+    }
+    
+    // Look for overloaded operator
+    auto overload = find_operator_overload(left, right, con.op);
+    if (overload) {
+        // May require generic instantiation
+        instantiate_overload(overload, con);
+        return true;
+    }
+    
+    // Not yet solvable - wait for more information
+    return false;
+}
+```
+</Step>
+</Steps>
+
+## Generic Instantiation
+
+Generic functions and classes are instantiated on demand:
+
+### Generic Function
+
+```yoyo
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+let y = identity(42);  // Instantiate with T = i32
+```
+
+Instantiation process:
+
+```cpp
+void IRGenerator::generateGenericFunction(
+    ModuleBase* mod,
+    const std::string& hash,
+    GenericFunctionDeclaration* fn,
+    std::span<Type> types
+) {
+    // Create substitution map: T -> i32
+    std::unordered_map<std::string, Type> subst;
+    for (size_t i = 0; i < fn->type_params.size(); i++)
+        subst[fn->type_params[i]] = types[i];
+    
+    // Clone AST and substitute types
+    auto instantiated = clone_with_substitution(fn->body, subst);
+    
+    // Type check the instantiation
+    TypeCheckerState state;
+    state.resolve_function(instantiated.get(), this, signature);
+}
+```
+
+### Monomorphization
+
+Each unique set of type arguments creates a new function:
+
+```yoyo
+identity::<i32>  // First instantiation
+identity::<f64>  // Second instantiation  
+identity::<Vec<i32>>  // Third instantiation
+```
+
+Mangled names:
+
+```cpp
+std::string mangleGenericArgs(const std::vector<Type>& types) {
+    if (types.empty()) return "";
+    std::string result = "::<" + types[0].full_name();
+    for (size_t i = 1; i < types.size(); i++)
+        result += "," + types[i].full_name();
+    result += ">";
+    return result;
+}
+
+// identity::<i32>
+// identity::<f64>
+// identity::<Vec<i32>>
+```
+
+## Interface Implementation
+
+Interfaces (traits) impose constraints on types:
+
+```yoyo
+interface Printable {
+    fn print(self: &Self);
+}
+
+impl Printable for i32 {
+    fn print(self: &i32) {
+        // ...
+    }
+}
+```
+
+Checking implementation:
+
+```cpp
+bool ConstraintSolver::operator()(ImplInterfaceConstraint& con) {
+    Type ty = state->best_repr(con.type);
+    Type iface = state->best_repr(con.interface);
+    
+    // Look up implementation
+    auto impl = find_interface_impl(ty, iface, irgen->module);
+    if (!impl) {
+        has_error = true;
+        irgen->error(Error{
+            .message = "Type doesn't implement interface",
+            .location = con.expr->location
+        });
+        return true;
+    }
+    
+    // Check all required methods exist
+    for (auto& method : iface.required_methods) {
+        if (!impl->has_method(method.name)) {
+            // Error: missing method
+        }
+        // Constrain method signature to match
+        add_new_constraint(...);
+    }
+    
+    return true;
+}
+```
+
+## Type Representation After Solving
+
+Once constraints are solved:
+
+```cpp
+Type TypeCheckerState::best_repr(const Type& ty) {
+    if (!ty.is_type_var()) return ty;  // Already concrete
+    
+    uint32_t id = tbl.type_to_id(ty);
+    uint32_t root = tbl.find(id);
+    
+    // Check if domain has a unique solution
+    Domain* dom = tbl.domain_of(root);
+    if (dom->is_solved())
+        return dom->get_solution();
+    
+    // Still unknown - return type variable
+    return tbl.id_to_type(root);
+}
+```
+
+## Error Reporting
+
+Type errors include:
+
+<CodeGroup>
+```text Type Mismatch
+error: type mismatch
+  --> main.yy:3:10
+   |
+ 3 | let x: i32 = "hello";
+   |              ^^^^^^^ expected i32, found &str
+```
+
+```text Missing Field
+error: struct Point has no field 'z'
+  --> main.yy:5:10  
+   |
+ 5 | print(p.z);
+   |          ^ field not found
+```
+
+```text Operator Not Defined
+error: binary operator + not defined for Vec<i32> and i32
+  --> main.yy:4:10
+   |
+ 4 | let y = vec + 5;
+   |         ^^^ ^
+```
+</CodeGroup>
+
+## Performance
+
+<CardGroup cols={2}>
+<Card title="Constraint Generation" icon="bolt">
+O(n) where n is AST size. Single traversal.
+</Card>
+
+<Card title="Solving" icon="gauge">
+O(c * log n) where c is constraint count. Union-find is nearly constant time.
+</Card>
+
+<Card title="Generic Expansion" icon="clone">
+Can be exponential if unconstrained. Memoization helps.
+</Card>
+
+<Card title="Total Time" icon="clock">
+Typically 10-20% of total compilation time.
+</Card>
+</CardGroup>
+
+## Key Files
+
+<CodeGroup>
+```text Header
+include/yoyo/type_checker.h:449 lines
+- Constraint definitions
+- UnificationTable
+- TypeCheckerState
+- ConstraintSolver
+```
+
+```text Implementation
+src/yoyo/type_checker.cpp
+- Constraint solving logic
+- Domain narrowing
+- Error reporting
+```
+</CodeGroup>
+
+## Further Reading
+
+<CardGroup cols={2}>
+<Card title="Borrow Checker" href="/advanced/borrow-checker" icon="shield-check">
+See how types are used for memory safety
+</Card>
+
+<Card title="Compilation Pipeline" href="/advanced/compilation" icon="gears">
+Understand where type checking fits
+</Card>
+
+<Card title="Type Syntax" href="/language/types" icon="code">
+Learn Yoyo's type syntax
+</Card>
+
+<Card title="Generics" href="/language/generics" icon="diagram-project">
+Writing generic functions and classes
+</Card>
+</CardGroup>

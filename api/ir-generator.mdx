@@ -1,0 +1,333 @@
+---
+title: "IRGenerator"
+description: "Base class for intermediate representation generation in Yoyo"
+---
+
+## Overview
+
+`IRGenerator` is the abstract base class for all IR generation backends in Yoyo. It provides the core infrastructure for converting parsed AST nodes into executable code through different compilation strategies (LLVM JIT or YVM bytecode).
+
+<Note>
+You typically don't instantiate `IRGenerator` directly. Instead, use backend-specific implementations like `LLVMIRGenerator` or `YVMIRGenerator`.
+</Note>
+
+## Class Definition
+
+```cpp include/yoyo/ir_gen.h
+namespace Yoyo {
+    class IRGenerator {
+    public:
+        // Core state
+        SourceView* view;
+        Type this_t;
+        Type return_t;
+        bool in_class = false;
+        ModuleBase* module;
+        bool has_error = false;
+        
+        // Scope management
+        std::vector<std::vector<UsingStatement*>> used_types;
+        std::unique_ptr<Statement>* current_Statement;
+        std::vector<CFGNodeManager> function_cfgs;
+        std::string block_hash;
+        
+        // Abstract interface
+        virtual std::optional<Type> getVariableType(
+            const std::string& name, 
+            Expression*
+        ) = 0;
+        
+        virtual void doFunction(FunctionDeclaration*) = 0;
+        virtual void doClass(ClassDeclaration*) = 0;
+        virtual void doAlias(AliasDeclaration*) = 0;
+        virtual void doConst(ConstantDeclaration*) = 0;
+        
+        // Type and signature operations
+        void saturateSignature(FunctionSignature& sig, ModuleBase* md);
+        std::optional<Type> inferReturnType(Statement* stat);
+        bool isShadowing(const std::string&) const;
+        
+        // Error handling
+        void error(const Error& err);
+        std::string reset_hash();
+        
+        // Class analysis
+        void annotateClass(ClassDeclaration*);
+        void checkClass(ClassDeclaration*);
+        
+        // Generic instantiation
+        void generateGenericFunction(
+            ModuleBase* mod, 
+            const std::string& hash,
+            GenericFunctionDeclaration* fn, 
+            std::span<Type> types
+        );
+        
+        void generateGenericClass(
+            ModuleBase* mod,
+            const std::string& hash,
+            GenericClassDeclaration* decl,
+            std::span<Type> types
+        );
+        
+        void generateGenericAlias(
+            ModuleBase* mod,
+            const std::string& block,
+            GenericAliasDeclaration* decl,
+            std::span<Type> types
+        );
+        
+        void generateGenericInterface(
+            ModuleBase* md,
+            const std::string& block,
+            GenericInterfaceDeclaration* decl,
+            std::span<Type> types
+        );
+        
+        // Utilities
+        std::optional<Error> apply_using(
+            Type&, 
+            ModuleBase*&, 
+            std::string&
+        );
+        
+        static FunctionDeclaration* GetParentFunction(ASTNode* node);
+        
+        template<std::ranges::forward_range T>
+        static std::string mangleGenericArgs(const T& list);
+    };
+}
+```
+
+## Core Members
+
+<ResponseField name="view" type="SourceView*">
+Pointer to the source code view for error reporting and location tracking.
+</ResponseField>
+
+<ResponseField name="this_t" type="Type">
+The type of `this` when generating code inside a class method.
+</ResponseField>
+
+<ResponseField name="return_t" type="Type">
+The expected return type of the current function being generated.
+</ResponseField>
+
+<ResponseField name="in_class" type="bool" default="false">
+Flag indicating whether code generation is currently inside a class definition.
+</ResponseField>
+
+<ResponseField name="module" type="ModuleBase*">
+Pointer to the current module being compiled.
+</ResponseField>
+
+<ResponseField name="has_error" type="bool" default="false">
+Flag set when an error occurs during IR generation.
+</ResponseField>
+
+## Abstract Methods
+
+Backend implementations must override these pure virtual methods:
+
+### getVariableType
+
+```cpp
+virtual std::optional<Type> getVariableType(
+    const std::string& name,
+    Expression* expr
+) = 0;
+```
+
+Resolve the type of a variable by name within the current scope.
+
+<ParamField path="name" type="const std::string&">
+The variable name to look up.
+</ParamField>
+
+<ParamField path="expr" type="Expression*">
+The expression context where the variable is referenced.
+</ParamField>
+
+**Returns:** The type of the variable if found, or `std::nullopt` if not found.
+
+### doFunction
+
+```cpp
+virtual void doFunction(FunctionDeclaration* decl) = 0;
+```
+
+Generate IR for a function declaration.
+
+### doClass
+
+```cpp
+virtual void doClass(ClassDeclaration* decl) = 0;
+```
+
+Generate IR for a class declaration.
+
+### doAlias
+
+```cpp
+virtual void doAlias(AliasDeclaration* decl) = 0;
+```
+
+Process a type alias declaration.
+
+### doConst
+
+```cpp
+virtual void doConst(ConstantDeclaration* decl) = 0;
+```
+
+Generate IR for a constant declaration.
+
+## Generic Type Instantiation
+
+The IR generator handles generic type instantiation through several methods:
+
+### generateGenericFunction
+
+```cpp
+void generateGenericFunction(
+    ModuleBase* mod,
+    const std::string& hash,
+    GenericFunctionDeclaration* fn,
+    std::span<Type> types
+);
+```
+
+Instantiate a generic function with concrete type arguments.
+
+<ParamField path="mod" type="ModuleBase*">
+The module containing the generic function.
+</ParamField>
+
+<ParamField path="hash" type="const std::string&">
+The block hash for name mangling.
+</ParamField>
+
+<ParamField path="fn" type="GenericFunctionDeclaration*">
+The generic function to instantiate.
+</ParamField>
+
+<ParamField path="types" type="std::span<Type>">
+Concrete types to substitute for type parameters.
+</ParamField>
+
+### generateGenericClass
+
+```cpp
+void generateGenericClass(
+    ModuleBase* mod,
+    const std::string& hash,
+    GenericClassDeclaration* decl,
+    std::span<Type> types
+);
+```
+
+Instantiate a generic class with concrete type arguments.
+
+## Utilities
+
+### mangleGenericArgs
+
+```cpp
+template<std::ranges::forward_range T>
+static std::string mangleGenericArgs(const T& list);
+```
+
+Generate a mangled string representation of generic type arguments.
+
+**Example:**
+```cpp
+std::vector<Type> types = {Type{"i32"}, Type{"str"}};
+std::string mangled = IRGenerator::mangleGenericArgs(types);
+// Result: "::<i32,str>"
+```
+
+### saturateSignature
+
+```cpp
+void saturateSignature(FunctionSignature& sig, ModuleBase* md);
+```
+
+Resolve all type references in a function signature to their fully-qualified forms.
+
+### inferReturnType
+
+```cpp
+std::optional<Type> inferReturnType(Statement* stat);
+```
+
+Attempt to infer the return type from a statement (for type inference in lambdas and closures).
+
+## ExpressionTypeChecker
+
+The `ExpressionTypeChecker` class works in conjunction with `IRGenerator` to perform type checking on expressions:
+
+```cpp
+class ExpressionTypeChecker {
+    IRGenerator* irgen;
+    std::optional<Type> target;
+    
+public:
+    explicit ExpressionTypeChecker(
+        IRGenerator* gen,
+        std::optional<Type> target = std::nullopt
+    );
+    
+    struct Result : std::variant<FunctionType, Error> {
+        operator bool() const;
+        FunctionType& value();
+        const Error& error() const;
+        std::optional<FunctionType> to_optional();
+        FunctionType value_or_error() const;
+    };
+    
+    // Type checking for all expression types
+    Result operator()(IntegerLiteral*);
+    Result operator()(BooleanLiteral*);
+    Result operator()(StringLiteral*);
+    Result operator()(NameExpression*);
+    Result operator()(BinaryOperation*);
+    Result operator()(CallOperation*);
+    // ... and more
+};
+```
+
+### Usage Example
+
+```cpp
+ExpressionTypeChecker checker(irgen, expected_type);
+auto result = checker(some_expression);
+
+if (result) {
+    FunctionType type = result.value();
+    // Use the type
+} else {
+    Error err = result.error();
+    // Handle error
+}
+```
+
+## Error Handling
+
+### error
+
+```cpp
+void error(const Error& err);
+```
+
+Report an error during IR generation. Sets `has_error` flag to true.
+
+<ParamField path="err" type="const Error&">
+The error to report.
+</ParamField>
+
+## See Also
+
+- [LLVMIRGenerator](/api/llvm-backend) - LLVM backend implementation
+- [YVMIRGenerator](/api/yvm-backend) - YVM bytecode backend implementation
+- [Engine](/api/engine) - Execution engine interface
+- [ModuleBase](/api/module) - Module management

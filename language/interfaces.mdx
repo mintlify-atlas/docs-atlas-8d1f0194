@@ -1,0 +1,409 @@
+---
+title: Interfaces
+description: Create polymorphic abstractions using Yoyo's interface system with the impl keyword
+---
+
+Interfaces in Yoyo define abstract behavior that types can implement. They enable polymorphism, allowing you to write generic code that works with any type implementing a specific interface.
+
+## Interface Declaration
+
+Interfaces are declared using `interface` and contain method signatures:
+
+```yoyo
+Iterator: interface::<T> = {
+    next: fn (&mut this) -> T?
+    // Additional methods...
+}
+```
+
+<Note>
+Interface syntax and semantics are still being refined in Yoyo's development.
+</Note>
+
+## Implementing Interfaces
+
+Use the `impl` keyword to implement an interface for a type:
+
+### Basic Implementation
+
+```yoyo
+LinkedListIterator: struct:&::<T> impl core::Iterator::<&T> = {
+    curr: (^Node::<T>)?,
+    
+    impl core::Iterator::<&T> {
+        next: fn (&mut this) -> (&T)? = {
+            if |node| (this.curr) {
+                this.curr = node.next;
+                return &node.data;
+            }
+            else return null;
+        }
+    }
+}
+```
+
+This struct:
+1. Declares it implements `core::Iterator::<&T>` in the struct header
+2. Provides the implementation in an `impl` block
+3. Defines all required interface methods
+
+## Generic Interfaces
+
+Interfaces can be generic over type parameters:
+
+```yoyo
+Iterator: interface::<T> = {
+    // Methods using T
+}
+
+// Implement for specific type parameter
+LinkedListIterator: struct:&::<T> impl core::Iterator::<&T> = {
+    // Implementation yields references to T
+}
+```
+
+## Multiple Type Parameters
+
+Interfaces and implementations can have multiple type parameters:
+
+```yoyo
+EnumerateIter: struct:&::<T, O> impl core::Iterator::<(u64, O)> = {
+    actual_iter: T,
+    idx: u64,
+    
+    impl core::Iterator::<(u64, O)> {
+        next: fn (&mut this) -> (u64, O)? = {
+            if |nxt| (this.actual_iter.core::Iterator::<O>::next()) {
+                this.idx = this.idx + 1;
+                return (this.idx, nxt);
+            }
+            else return null;
+        }
+    }
+}
+```
+
+Here:
+- `T` is the underlying iterator type
+- `O` is the element type the underlying iterator yields
+- The struct implements `Iterator` yielding tuples `(u64, O)`
+
+## Interface Constraints
+
+Use interface constraints in generic code:
+
+### Function Constraints
+
+```yoyo
+enumerate: fn::<T: impl core::Iterator::<O>, O> (iter: T) ->
+    EnumerateIter::<T, O> = 
+    return EnumerateIter::<T, O>{
+        .actual_iter = iter, 
+        .idx = 0
+    };
+```
+
+This function accepts any type `T` that implements `core::Iterator::<O>`.
+
+### Multiple Constraints
+
+```yoyo
+chain: fn::<
+    A: impl core::Iterator::<O>, 
+    B: impl core::Iterator::<O>, 
+    O
+> (first: A, snd: B) -> ChainIter::<A, B, O> = 
+    return ChainIter::<A, B, O>{
+        .first_iter = first, 
+        .second_iter = snd
+    };
+```
+
+Both `A` and `B` must implement `core::Iterator::<O>` with the same element type `O`.
+
+## Calling Interface Methods
+
+### Direct Method Call
+
+When unambiguous, call interface methods directly:
+
+```yoyo
+if |nxt| (this.first_iter.next()) {
+    return nxt;
+}
+```
+
+### Qualified Method Call
+
+When ambiguous (e.g., multiple interfaces with `next()`), use a qualified path:
+
+```yoyo
+if |nxt| (this.actual_iter.core::Iterator::<O>::next()) {
+    this.idx = this.idx + 1;
+    return (this.idx, nxt);
+}
+```
+
+## Real-World Example: Iterator Interface
+
+The `Iterator` interface is a core abstraction in Yoyo:
+
+### Iterator Interface (Conceptual)
+
+```yoyo
+core::Iterator: interface::<T> = {
+    next: fn (&mut this) -> T?
+    // Other methods like map, filter, etc.
+}
+```
+
+### Implementing Iterator for LinkedList
+
+```yoyo
+Node: struct::<T> = {
+    data: T,
+    next: (^Node::<T>)?
+}
+
+LinkedList: struct::<T> = {
+    first: (^Node::<T>)?
+}
+
+LinkedListIterator: struct:&::<T> impl core::Iterator::<&T> = {
+    curr: (^Node::<T>)?,
+    
+    impl core::Iterator::<&T> {
+        next: fn (&mut this) -> (&T)? = {
+            if |node| (this.curr) {
+                this.curr = node.next;
+                return &node.data;
+            }
+            else return null;
+        }
+    }
+}
+
+iter: fn::<T> (list: &LinkedList::<T>) -> LinkedListIterator::<T>
+    = return LinkedListIterator::<T> { .curr = list.first };
+```
+
+### Using the Iterator
+
+```yoyo
+main: fn = {
+    a: mut = LinkedList::<str>::new();
+    a.append("Hello");
+    a.append("World");
+    
+    for (item in a.iter()) {
+        app::func(&"${*item}");
+    }
+}
+```
+
+## Iterator Adapters
+
+Interface implementations enable composable iterator adapters:
+
+### Chain Iterator
+
+```yoyo
+ChainIter: struct:&::<A, B, O> impl core::Iterator::<O> = {
+    first_iter: A,
+    second_iter: B,
+    
+    impl core::Iterator::<O> {
+        next: fn (&mut this) -> O? = {
+            if |nxt| (this.first_iter.core::Iterator::<O>::next()) 
+                return nxt;
+            else 
+                return this.second_iter.core::Iterator::<O>::next();
+        }
+    }
+}
+
+chain: fn::<
+    A: impl core::Iterator::<O>, 
+    B: impl core::Iterator::<O>, 
+    O
+> (first: A, snd: B) -> ChainIter::<A, B, O> = 
+    return ChainIter::<A, B, O>{
+        .first_iter = first, 
+        .second_iter = snd
+    };
+```
+
+### Enumerate Iterator
+
+```yoyo
+EnumerateIter: struct:&::<T, O> impl core::Iterator::<(u64, O)> = {
+    actual_iter: T,
+    idx: u64,
+    
+    impl core::Iterator::<(u64, O)> {
+        next: fn (&mut this) -> (u64, O)? = {
+            if |nxt| (this.actual_iter.core::Iterator::<O>::next()) {
+                this.idx = this.idx + 1;
+                return (this.idx, nxt);
+            }
+            else return null;
+        }
+    }
+}
+
+enumerate: fn::<T: impl core::Iterator::<O>, O> (iter: T) ->
+    EnumerateIter::<T, O> = 
+    return EnumerateIter::<T, O>{
+        .actual_iter = iter, 
+        .idx = 0
+    };
+```
+
+### Composing Adapters
+
+```yoyo
+main: fn = {
+    a: mut = LinkedList::<str>::new();
+    a.append("First");
+    
+    b: mut = LinkedList::<str>::new();
+    b.append("Second");
+    
+    // Chain and enumerate
+    for (lol in a.iter().chain(b.iter()).enumerate()) {
+        app::func(&"${lol.0}: ${*lol.1}");
+    }
+}
+```
+
+This composes three iterators:
+1. `a.iter()` → `LinkedListIterator::<str>`
+2. `.chain(b.iter())` → `ChainIter`
+3. `.enumerate()` → `EnumerateIter`
+
+## Associated Types
+
+Interfaces can define associated types (type aliases):
+
+```yoyo
+ListIter: struct::<T> impl Iterator = {
+    node: ^Node::<T>
+    
+    Iterator {
+        ElementTy: alias = &T;  // Associated type
+        
+        is_end: fn (&this) -> bool = 
+            return this.node.next.has_value();
+            
+        value: fn (&this) -> ElementTy = 
+            return &node.value;
+    }
+}
+```
+
+## Interface Ownership Annotations
+
+Interfaces can be implemented for different ownership models:
+
+```yoyo
+// Reference ownership (non-owning)
+LinkedListIterator: struct:&::<T> impl core::Iterator::<&T> = {
+    // ...
+}
+
+// Value ownership
+OwnedIterator: struct::<T> impl core::Iterator::<T> = {
+    // ...
+}
+```
+
+The `:&` suffix indicates reference ownership.
+
+## Interface Implementation Blocks
+
+From the compiler's perspective, interface implementations use `InterfaceImplementation`:
+
+```cpp
+// From class_entry.h (conceptual):
+struct InterfaceImplementation {
+    std::string interface_name;
+    std::vector<Type> type_params;
+    std::vector<std::unique_ptr<FunctionDeclaration>> methods;
+};
+```
+
+Structs can implement multiple interfaces:
+
+```cpp
+class ClassDeclaration {
+    std::vector<InterfaceImplementation> impls;
+    // ...
+};
+```
+
+## Union Interfaces
+
+Unions can also have interfaces and member functions:
+
+```yoyo
+Message: union = {
+    Quit: void,
+    Write: str,
+    ChangeColor: i32 & i32 & i32
+    
+    // Member function (like interface method)
+    broadcast: fn (this, b: Broadcaster) -> void! = 
+        return b.perform_broadcast(this);
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Design Minimal Interfaces">
+    Keep interfaces small and focused. Prefer multiple small interfaces over one large interface.
+  </Step>
+  
+  <Step title="Use Interface Constraints">
+    Constrain generic type parameters with `impl Interface` to document requirements.
+  </Step>
+  
+  <Step title="Qualify Ambiguous Calls">
+    Use `Type::Interface::<T>::method()` syntax when method names collide.
+  </Step>
+  
+  <Step title="Compose Interfaces">
+    Build complex behavior by composing simple interfaces (like iterator adapters).
+  </Step>
+</Steps>
+
+## Future Developments
+
+The interface system is evolving:
+
+- **Generic Interface Declarations**: `GenericInterfaceDeclaration` for interface-level generics
+- **Impl-for Blocks**: Implement interfaces for external types
+- **Default Methods**: Provide default implementations in interfaces
+- **Interface Views**: Non-concrete view types like `[T]:.`
+
+<Warning>
+Interface syntax and semantics are actively being refined as Yoyo is a research language.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Functions" icon="function" href="/language/functions">
+    Learn more about function declarations and member functions
+  </Card>
+  
+  <Card title="Generics" icon="code" href="/language/generics">
+    Dive deeper into generic type parameters and constraints
+  </Card>
+  
+  <Card title="Types" icon="shapes" href="/language/types">
+    Explore Yoyo's type system including structs and enums
+  </Card>
+  
+  <Card title="Operator Overloading" icon="plus" href="/language/operator-overloading">
+    Define custom operators for your types
+  </Card>
+</CardGroup>

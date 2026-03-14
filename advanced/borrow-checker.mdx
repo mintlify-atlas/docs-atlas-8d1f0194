@@ -1,0 +1,572 @@
+---
+title: Borrow Checker
+description: Deep dive into Yoyo's compile-time memory safety verification system
+icon: shield-check
+---
+
+## Overview
+
+Yoyo's borrow checker ensures memory safety at compile-time without runtime overhead. It uses a sophisticated SSA-based intermediate representation with domain analysis to verify that references never outlive their referents and that mutable and immutable borrows don't conflict.
+
+<Note>
+The borrow checker operates on a custom IR (not LLVM IR) that includes domain constraints, phi nodes, and explicit ownership transfer instructions.
+</Note>
+
+## Architecture
+
+The borrow checking system consists of several key components:
+
+### Control Flow Graph (CFG)
+
+The borrow checker builds a CFG with basic blocks containing specialized instructions:
+
+```cpp
+struct BasicBlock {
+    std::string debug_name;
+    std::vector<std::unique_ptr<Instruction>> instructions;
+    std::vector<BasicBlock*> preds;
+};
+```
+
+### Instruction Types
+
+<AccordionGroup>
+<Accordion title="Value Instructions">
+
+**NewPrimitiveInstruction** - Creates primitive values (integers, floats, booleans)
+
+**NewAggregateInstruction** - Creates struct/class instances with field initialization
+
+**NewArrayInstruction** - Creates arrays from a list of values
+
+```cpp
+class NewAggregateInstruction : public Instruction {
+public:
+    std::string into;
+    Type type_name;
+    std::unordered_map<std::string, Value> values;
+};
+```
+</Accordion>
+
+<Accordion title="Ownership Instructions">
+
+**BorrowValueInstruction** - Creates an immutable reference to a value
+
+**RelocateValueInstruction** - Transfers ownership (move semantics)
+
+**DropInstruction** - Explicitly destroys a value
+
+```cpp
+class BorrowValueInstruction : public Instruction {
+public:
+    Value val;       // What to borrow
+    std::string into; // Result variable
+};
+
+class RelocateValueInstruction : public Instruction {
+public:
+    Value val;       // What to move
+    std::string into; // Destination
+};
+```
+</Accordion>
+
+<Accordion title="Memory Operations">
+
+**DerefOperation** - Gets the domain of a reference without loading
+
+**DerefLoadOperation** - Loads through a reference with alias analysis
+
+**AssignInstruction** - Stores to an lvalue location
+
+```cpp
+class DerefLoadOperation : public Instruction {
+public:
+    Value reference;
+    Domain ref_domain;              // Points-to information
+    std::vector<MayLoadOperation*> may_loads;  // Alias set
+    std::vector<Instruction*> definer;         // SSA definitions
+    std::string into;
+};
+```
+</Accordion>
+
+<Accordion title="Control Flow Instructions">
+
+**PhiInstruction** - SSA phi node for value merging
+
+**DomainPhiInstruction** - SSA phi node for domain merging
+
+**BrInstruction** - Unconditional branch
+
+**CondBrInstruction** - Conditional branch with multiple targets
+
+**RetInstruction** - Function return
+
+```cpp
+class PhiInstruction : public Instruction {
+public:
+    std::vector<Value> args;  // Values from predecessors
+    std::string into;         // Result SSA variable
+};
+```
+</Accordion>
+
+<Accordion title="Domain Constraints">
+
+**DomainSubsetConstraint** - Enforces that one domain outlives another
+
+**DomainExtensionConstraint** - Allows domain lifetime extension
+
+**DomainDependenceEdgeConstraint** - Declares domain dependencies
+
+```cpp
+class DomainSubsetConstraint : public Instruction {
+public:
+    Domain super;  // Must outlive
+    Domain sub;    // The constrained domain
+    std::string lvalue_domain;  // For lvalue constraints
+};
+```
+</Accordion>
+</AccordionGroup>
+
+## Domain Analysis
+
+### What Are Domains?
+
+Domains represent the **lifetime regions** of values. Each reference type carries domain variables that track how long the referenced data must remain valid.
+
+<CodeGroup>
+```cpp Example Domain Types
+// Primitive - no domains needed
+BorrowCheckerType::Primitive  
+
+// Reference with domain 'a
+BorrowCheckerType::RefPtr { 
+    subtype: i32,
+    domains: [('a, bidirectional)] 
+}
+
+// Nested reference &'a &'b i32
+BorrowCheckerType::RefPtr {
+    subtype: RefPtr { 
+        subtype: i32,
+        domains: [('b, bidirectional)]
+    },
+    domains: [('a, unidirectional)]
+}
+```
+
+```yoyo Yoyo Code
+// Simple borrow
+let x = 42;
+let r = &x;  // r has domain 'a bound to x's lifetime
+
+// Field access preserves domains
+struct Point { x: i32, y: i32 }
+let p = Point { x: 1, y: 2 };
+let rx = &p.x;  // rx's domain tied to p
+```
+</CodeGroup>
+
+### Domain Types
+
+<CardGroup cols={2}>
+<Card title="Bidirectional Domains" icon="arrows-left-right">
+Used for owned references. Both the original and duplicates must maintain the same constraints.
+</Card>
+
+<Card title="Unidirectional Domains" icon="arrow-right">
+Used for nested references. Copies can extend freely but the inner domain remains fixed.
+</Card>
+</CardGroup>
+
+### Domain Variables
+
+Domain variables use a specialized naming scheme:
+
+```cpp
+struct Domain {
+    std::string name;
+    bool is_var() const { return name.starts_with("'?"); }
+    bool is_null() const { return name == "null"; }
+};
+```
+
+- `'?0`, `'?1`, etc. - Fresh domain variables
+- `null` - Special domain for stack-allocated non-references
+- `variable_name` - Domain bound to a specific variable
+
+## Compilation Pipeline
+
+The borrow checker runs through several phases:
+
+<Steps>
+<Step title="CFG Generation">
+
+Convert AST to basic blocks with ownership-aware instructions:
+
+```cpp
+void BorrowCheckerEmitter::operator()(VariableDeclaration* decl) {
+    // Evaluate initializer
+    Value init_val = (*this)(decl->initializer.get());
+    
+    // Create variable with unique SSA name
+    std::string var_id = name_based_on(decl->name);
+    
+    // Track for scope-based dropping
+    variables.back().emplace_back(decl->name, var_id);
+    
+    // Emit move instruction
+    current_block->add_instruction(
+        new RelocateValueInstruction(std::move(init_val), var_id)
+    );
+}
+```
+</Step>
+
+<Step title="SSA Transformation">
+
+Convert to Single Static Assignment form:
+
+- Insert phi nodes at control flow merge points
+- Rename variables to unique SSA names
+- Build dominance frontiers
+
+```cpp
+void DomainCheckerState::transform_to_ssa() {
+    ValueProducer producer;
+    // For each block, rename all value uses
+    // Insert PhiInstruction at merge points
+}
+```
+</Step>
+
+<Step title="Domain Insertion">
+
+The `DomainVariableInserter` traverses instructions and adds domain constraints:
+
+```cpp
+class DomainVariableInserter {
+public:
+    // Add subset constraints: super_domain ⊇ sub_domain
+    void add_assign_constraints_between_types(
+        const BorrowCheckerType& lhs,
+        const BorrowCheckerType& rhs
+    );
+    
+    // For array/struct updates
+    void add_extend_constraints_between_types(
+        const BorrowCheckerType& container,
+        const BorrowCheckerType& element  
+    );
+};
+```
+
+When you write `let x = &y;`, this generates:
+
+```text
+DomainSubsetConstraint('?y_domain ⊇ '?x_domain)
+```
+</Step>
+
+<Step title="Points-To Analysis">
+
+Build a graph showing what each domain might point to:
+
+```cpp
+struct PointsToGraph {
+    std::unordered_map<std::string, 
+                       std::unordered_set<std::string>> pointee_pairs;
+    
+    bool add_edge(std::string domain, std::string pointee);
+};
+```
+
+This is used to determine:
+- Which domains are invalidated by a move
+- What aliases exist through references
+- Whether a dereference is safe
+</Step>
+
+<Step title="Dataflow Analysis">
+
+Compute live domains at each program point:
+
+```cpp
+void DomainCheckerState::do_domain_validity_analysis(BasicBlock* entry) {
+    // Forward dataflow: which domains are valid?
+    for (Instruction* inst : block->instructions) {
+        // Kill domains on move/drop
+        // Propagate to successors
+    }
+}
+```
+
+The analysis tracks:
+- `dfa_in[inst]` - Valid domains before instruction
+- `dfa_out[inst]` - Valid domains after instruction  
+- `domain_kill_reason` - Why each domain was killed
+</Step>
+
+<Step title="Borrow Checking">
+
+Verify that every dereference is safe:
+
+```cpp
+void BorrowCheckVisitor::operator()(DerefLoadOperation* deref) {
+    // Check: is ref_domain valid here?
+    if (!dfa_in[deref].contains(deref->ref_domain.name)) {
+        // ERROR: Use after move/drop!
+        auto& reason = state->domain_kill_reason[deref->ref_domain.name];
+        report_error(deref, reason);
+    }
+}
+```
+</Step>
+</Steps>
+
+## Type System Integration
+
+### Borrow Checker Types
+
+Each value has a `BorrowCheckerType` describing its structure:
+
+```cpp
+struct BorrowCheckerType {
+    enum TypeType {
+        Primitive,   // i32, f64, bool - no ownership
+        Aggregate,   // struct with fields
+        Union,       // enum/tagged union
+        UniquePtr,   // Box<T> - owned pointer
+        Array,       // Vec<T> - owned array
+        RefPtr,      // &T or &mut T
+        LValue,      // *mut T - for assignments
+        Named        // User-defined type
+    };
+    
+    std::variant<...> details;
+    std::vector<std::pair<Domain, bool>> domains;
+};
+```
+
+<Warning>
+Named types are looked up lazily to handle recursive structures. The cache is stored in `DomainCheckerState::named_value_type_cache`.
+</Warning>
+
+### Domain Operations
+
+<Tabs>
+<Tab title="Borrowing">
+
+Creates a reference type with a fresh domain:
+
+```cpp
+BorrowCheckerType BorrowCheckerType::borrowed(DomainCheckerState* state) const {
+    auto result = BorrowCheckerType::RefPtr {
+        subtype: this->cloned(state),
+        domains: [(state->new_domain_var(), bidirectional)]
+    };
+    return result;
+}
+```
+</Tab>
+
+<Tab title="Cloning">
+
+Makes a deep copy with fresh domains:
+
+```cpp
+BorrowCheckerType BorrowCheckerType::cloned(DomainCheckerState* state) const {
+    // For aggregates: recursively clone all fields
+    // For references: create new domain variables
+    // For primitives: just copy
+}
+```
+</Tab>
+
+<Tab title="Moving">
+
+Preserves domains (transfer ownership):
+
+```cpp
+BorrowCheckerType BorrowCheckerType::moved(DomainCheckerState* state) const {
+    // Same structure, same domains
+    // But original value is invalidated
+}
+```
+</Tab>
+
+<Tab title="Dereferencing">
+
+Strips the outermost reference:
+
+```cpp
+BorrowCheckerType BorrowCheckerType::deref() const {
+    auto ref = std::get<RefPtrDetails>(details);
+    return std::move(*ref.subtype);
+}
+```
+</Tab>
+</Tabs>
+
+## Advanced Features
+
+### May-Alias Analysis
+
+For indirect memory operations:
+
+```cpp
+class MayStoreOperation : public Instruction {
+public:
+    Instruction* origin;  // The actual store instruction
+    Domain old_domain;    // Domain before store
+    Domain new_domain;    // Domain after store
+};
+
+class MayLoadOperation : public Instruction {
+public:
+    Instruction* origin;  // The actual load instruction  
+    Domain domain;        // What domain it loads from
+};
+```
+
+These are inserted when dereferencing pointers to track:
+- What memory locations might be modified
+- What dependencies exist between loads and stores
+
+### Def-Use Chains
+
+```cpp
+struct DefUseGraph {
+    std::unordered_map<
+        Instruction*,
+        std::unordered_set<std::pair<Instruction*, std::string>>
+    > edges;
+};
+```
+
+Tracks which instructions define values and where they're used, essential for:
+- Dead code elimination
+- Optimizing domain constraints  
+- Error reporting with precise locations
+
+### Scope-Based Dropping
+
+Variables are automatically dropped at scope exit:
+
+```cpp
+void BorrowCheckerEmitter::destroy_and_remove_block() {
+    // Drop in reverse order (LIFO)
+    for (auto& [name, id] : variables.back() | std::views::reverse) {
+        drop_object(Value::from(std::move(id)));
+    }
+    variables.pop_back();
+}
+```
+
+## Error Reporting
+
+When a borrow check fails, the system provides detailed diagnostics:
+
+```cpp
+struct KillReason {
+    enum InstructionSource { Assign, Drop };
+    InstructionSource source;
+    std::string affected_value;   // What was moved/dropped
+    std::string bad_pointee;      // What domain died
+    ASTNode* killing_instruction; // Where it happened
+    std::optional<std::string> lvalue_source;  // For indirect stores
+};
+```
+
+This enables error messages like:
+
+<CodeGroup>
+```text Error Message
+error: use of moved value 'x'
+  --> main.yy:5:10
+   |
+ 3 | let x = vec![1, 2, 3];
+ 4 | let y = x;  // x moved here
+ 5 | print(x);   // error: x was moved
+   |       ^ value used after move
+```
+
+```text Error Message  
+error: cannot borrow 'x' as mutable, already borrowed as immutable
+  --> main.yy:4:10
+   |
+ 3 | let r1 = &x;
+   |          -- immutable borrow occurs here
+ 4 | let r2 = &mut x;
+   |          ^^^^^^ mutable borrow occurs here
+ 5 | print(r1);
+   |       -- immutable borrow used here
+```
+</CodeGroup>
+
+## Performance Considerations
+
+<CardGroup cols={2}>
+<Card title="Compilation Speed" icon="gauge-high">
+The borrow checker adds ~15-30% to compile time. Most expensive: SSA transformation and points-to analysis.
+</Card>
+
+<Card title="Memory Usage" icon="memory">
+IR is typically 3-5x larger than the AST due to SSA renaming and domain constraints.
+</Card>
+
+<Card title="Optimization" icon="bolt">
+Domain constraints are erased after checking - zero runtime cost!
+</Card>
+
+<Card title="Scaling" icon="chart-line">
+Algorithm is O(n²) in worst case for deeply nested references, but typically O(n log n).
+</Card>
+</CardGroup>
+
+## Implementation Details
+
+Key file locations:
+
+<CodeGroup>
+```text Header
+include/yoyo/borrow_checker.h:788 lines
+- Domain and Value types
+- All instruction classes  
+- BorrowCheckerEmitter
+- DomainCheckerState
+```
+
+```text Implementation  
+src/yoyo/borrow_checker.cpp
+- CFG generation
+- SSA transformation
+- Domain insertion
+- Dataflow analysis
+- Error reporting
+```
+</CodeGroup>
+
+## Further Reading
+
+<CardGroup cols={2}>
+<Card title="Type System" href="/advanced/type-system" icon="diagram-project">
+Learn about constraint-based type inference
+</Card>
+
+<Card title="Compilation Pipeline" href="/advanced/compilation" icon="gears">
+See how borrow checking fits into the full pipeline
+</Card>
+
+<Card title="LLVM Backend" href="/advanced/backends" icon="microchip">
+How checked IR is lowered to machine code
+</Card>
+
+<Card title="Memory Model" href="/language/memory-model" icon="database">
+Understand Yoyo's ownership semantics
+</Card>
+</CardGroup>

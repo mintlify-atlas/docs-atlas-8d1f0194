@@ -1,0 +1,96 @@
+---
+title: Introduction
+description: Embeddable JIT-compiled memory safe scripting language for C++20
+---
+
+# Welcome to Yoyo
+
+Yoyo is a statically typed, memory-safe scripting language designed to be embedded in C++20 applications. With JIT compilation support through LLVM and a custom VM backend, Yoyo provides high performance while maintaining memory safety guarantees through compile-time borrow checking.
+
+<Note>
+This implementation is currently in active development and is very far from production-ready use.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Memory Safety" icon="shield-check">
+    Compile-time borrow checking ensures memory safety without garbage collection overhead
+  </Card>
+  <Card title="JIT Compilation" icon="bolt">
+    Choose between LLVM or YVM backends for optimal performance in your use case
+  </Card>
+  <Card title="Static Typing" icon="code">
+    Type inference and a rich type system with generics and interfaces
+  </Card>
+  <Card title="Embeddable" icon="plug">
+    Designed from the ground up to integrate seamlessly with C++20 applications
+  </Card>
+  <Card title="Operator Overloading" icon="brackets-curly">
+    Full support for customizing operators on user-defined types
+  </Card>
+  <Card title="Pattern Matching" icon="code-branch">
+    Conditional extraction and pattern matching for expressive control flow
+  </Card>
+</CardGroup>
+
+## Why Yoyo?
+
+Yoyo brings together modern language features with the safety and performance requirements of systems programming:
+
+- **Memory Safety**: Borrow checker prevents use-after-free, data races, and memory leaks at compile time
+- **Zero-Cost Abstractions**: Generics and interfaces compile down to efficient machine code
+- **C++20 Integration**: Native interoperability with modern C++ codebases
+- **Flexible Execution**: Choose LLVM for maximum performance or YVM for faster compilation times
+
+## Syntax Overview
+
+Yoyo's syntax is heavily inspired by [cpp2/cppfront](https://github.com/hsutter/cppfront) with all declarations following the form:
+
+```yoyo
+name: kind = value;
+```
+
+Here's a quick example:
+
+```yoyo
+// Variable declarations (type can be inferred)
+x: mut u32 = 42;
+
+// Function declarations
+add: fn (a: u32, b: u32) -> u32 = return a + b;
+
+// Implicit block syntax for single-statement functions
+square: fn (x: u32) -> u32 = return x * x;
+
+// Struct definitions
+Point: struct = {
+    x: f64,
+    y: f64
+}
+```
+
+## Getting Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up Yoyo in your development environment
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Write your first Yoyo program in minutes
+  </Card>
+  <Card title="Language Guide" icon="book" href="/language/syntax">
+    Learn the Yoyo language syntax and features
+  </Card>
+  <Card title="Embedding Guide" icon="cube" href="/embedding/setup">
+    Integrate Yoyo into your C++ application
+  </Card>
+</CardGroup>
+
+## Community & Support
+
+Yoyo is an open-source project under active development. Contributions, bug reports, and feedback are welcome on [GitHub](https://github.com/Git-i/yoyo-lang).
+
+<Warning>
+**Early Development Notice**: Yoyo is currently in the research and early development phase. APIs and language features are subject to change.
+</Warning>

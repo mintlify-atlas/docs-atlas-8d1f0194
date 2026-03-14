@@ -1,0 +1,270 @@
+---
+title: 'Engine'
+description: 'Core execution engine for Yoyo runtime'
+---
+
+The `Engine` class is the primary interface for executing Yoyo programs. It manages the runtime, modules, and source code execution.
+
+## Class Definition
+
+```cpp
+class YOYO_API Engine
+{
+protected:
+    Runtime rt;
+public:
+    Engine();
+    virtual ~Engine() = default;
+    Engine(Engine&&) noexcept = default;
+    virtual void* createGlobalConstant(const Type& type, const std::vector<Constant>& args, IRGenerator*) = 0;
+    std::unordered_map<std::string, std::unique_ptr<ModuleBase>> modules;
+    std::unordered_map<std::string, std::pair<std::string, std::vector<std::unique_ptr<Statement>>>> sources;
+    static std::string_view viewString(void* str);
+    void execute();
+    template<class Rep, class Period>
+    void sleep(const std::chrono::duration<Rep, Period>& sleep_duration);
+    void sleep(uint64_t milliseconds);
+};
+```
+
+## Methods
+
+### execute()
+
+Executes all loaded Yoyo programs in the engine.
+
+```cpp
+void execute();
+```
+
+<Note>
+This method runs the main execution loop, processing all statements that have been parsed and loaded into the engine.
+</Note>
+
+#### Example
+
+```cpp
+#include <yoyo/engine.h>
+
+class MyEngine : public Yoyo::Engine {
+public:
+    void* createGlobalConstant(const Yoyo::Type& type, 
+                               const std::vector<Yoyo::Constant>& args, 
+                               Yoyo::IRGenerator* gen) override {
+        // Implementation
+        return nullptr;
+    }
+};
+
+int main() {
+    MyEngine engine;
+    // Load and parse your Yoyo source code
+    engine.execute();
+    return 0;
+}
+```
+
+---
+
+### createGlobalConstant()
+
+Creates a global constant value in the runtime. This is a pure virtual method that must be implemented by derived classes.
+
+```cpp
+virtual void* createGlobalConstant(
+    const Type& type, 
+    const std::vector<Constant>& args, 
+    IRGenerator* gen
+) = 0;
+```
+
+#### Parameters
+
+<ParamField path="type" type="const Type&" required>
+  The type of the constant being created
+</ParamField>
+
+<ParamField path="args" type="const std::vector<Constant>&" required>
+  Vector of constant values used to initialize the global constant
+</ParamField>
+
+<ParamField path="gen" type="IRGenerator*" required>
+  Pointer to the IR generator for JIT compilation
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="void*">
+  Pointer to the created global constant in memory
+</ResponseField>
+
+#### Example
+
+```cpp
+class MyEngine : public Yoyo::Engine {
+public:
+    void* createGlobalConstant(const Yoyo::Type& type, 
+                               const std::vector<Yoyo::Constant>& args, 
+                               Yoyo::IRGenerator* gen) override {
+        // Allocate memory for the constant
+        void* constantPtr = allocateConstant(type);
+        
+        // Initialize with provided arguments
+        initializeConstant(constantPtr, type, args);
+        
+        return constantPtr;
+    }
+};
+```
+
+---
+
+### sleep() - Duration Overload
+
+Pauses execution for a specified duration using `std::chrono` types.
+
+```cpp
+template<class Rep, class Period>
+void sleep(const std::chrono::duration<Rep, Period>& sleep_duration);
+```
+
+#### Parameters
+
+<ParamField path="sleep_duration" type="const std::chrono::duration<Rep, Period>&" required>
+  Duration to sleep, using any `std::chrono::duration` type (seconds, milliseconds, etc.)
+</ParamField>
+
+#### Example
+
+```cpp
+#include <yoyo/engine.h>
+#include <chrono>
+
+using namespace std::chrono_literals;
+
+MyEngine engine;
+engine.sleep(500ms);  // Sleep for 500 milliseconds
+engine.sleep(2s);     // Sleep for 2 seconds
+```
+
+---
+
+### sleep() - Milliseconds Overload
+
+Pauses execution for a specified number of milliseconds.
+
+```cpp
+void sleep(uint64_t milliseconds);
+```
+
+#### Parameters
+
+<ParamField path="milliseconds" type="uint64_t" required>
+  Number of milliseconds to sleep
+</ParamField>
+
+#### Example
+
+```cpp
+#include <yoyo/engine.h>
+
+MyEngine engine;
+engine.sleep(1000);  // Sleep for 1 second
+```
+
+---
+
+### viewString()
+
+Converts a Yoyo string pointer to a `std::string_view` for safe viewing without ownership transfer.
+
+```cpp
+static std::string_view viewString(void* str);
+```
+
+#### Parameters
+
+<ParamField path="str" type="void*" required>
+  Pointer to a Yoyo string object
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="std::string_view">
+  A string view of the Yoyo string content
+</ResponseField>
+
+#### Example
+
+```cpp
+void* yoyoString = /* ... obtained from Yoyo runtime ... */;
+auto view = Yoyo::Engine::viewString(yoyoString);
+std::cout << "String content: " << view << std::endl;
+```
+
+## Public Members
+
+### modules
+
+```cpp
+std::unordered_map<std::string, std::unique_ptr<ModuleBase>> modules;
+```
+
+Map of loaded modules, indexed by module name.
+
+### sources
+
+```cpp
+std::unordered_map<std::string, std::pair<std::string, std::vector<std::unique_ptr<Statement>>>> sources;
+```
+
+Map of parsed source files, containing source code and parsed AST statements.
+
+## Protected Members
+
+### rt
+
+```cpp
+Runtime rt;
+```
+
+The runtime instance managing coroutines and execution scheduling.
+
+## Usage Example
+
+```cpp
+#include <yoyo/engine.h>
+#include <yoyo/parser.h>
+#include <iostream>
+
+class MyEngine : public Yoyo::Engine {
+public:
+    void* createGlobalConstant(const Yoyo::Type& type, 
+                               const std::vector<Yoyo::Constant>& args, 
+                               Yoyo::IRGenerator* gen) override {
+        // Implementation for creating constants
+        return nullptr;
+    }
+};
+
+int main() {
+    MyEngine engine;
+    
+    // Load and parse Yoyo source code
+    std::string source = "fn main() { println('Hello, Yoyo!'); }";
+    Yoyo::Parser parser(source);
+    auto statements = parser.parseProgram();
+    
+    if (!parser.failed()) {
+        // Store in engine
+        engine.sources["main"] = {source, std::move(statements)};
+        
+        // Execute the program
+        engine.execute();
+    } else {
+        std::cerr << "Parse error" << std::endl;
+    }
+    
+    return 0;
+}
+```

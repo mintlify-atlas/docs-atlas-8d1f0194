@@ -1,0 +1,274 @@
+---
+title: Installation
+description: Install and build Yoyo language from source with LLVM or YVM backend
+---
+
+Yoyo is a statically-typed research language written in C++20 that can be embedded in your applications. This guide will help you install dependencies and build Yoyo from source.
+
+<Warning>
+  This implementation is very far from useful and is currently in active research and development.
+</Warning>
+
+## Prerequisites
+
+Before building Yoyo, ensure you have the following installed:
+
+<Steps>
+  <Step title="C++20 Compiler">
+    You need a modern C++ compiler that supports C++20 features:
+    - GCC 10+ or Clang 12+
+    - MSVC 2019 16.11+ (on Windows)
+  </Step>
+
+  <Step title="Meson Build System">
+    Yoyo uses Meson as its build system. Install it via pip:
+    ```bash
+    pip install meson ninja
+    ```
+  </Step>
+
+  <Step title="Boehm-Demers-Weiser Garbage Collector (bdw-gc)">
+    The garbage collector is required for memory management:
+
+    <CodeGroup>
+    ```bash Ubuntu/Debian
+    sudo apt-get install libgc-dev
+    ```
+
+    ```bash Fedora/RHEL
+    sudo dnf install gc-devel
+    ```
+
+    ```bash macOS
+    brew install bdw-gc
+    ```
+
+    ```bash Arch Linux
+    sudo pacman -S gc
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Backend Dependencies">
+    Depending on your chosen executor backend, install the appropriate dependencies:
+
+    ### LLVM Backend (JIT Compilation)
+    For production JIT compilation with LLVM:
+
+    <CodeGroup>
+    ```bash Ubuntu/Debian
+    sudo apt-get install llvm-dev
+    ```
+
+    ```bash Fedora/RHEL
+    sudo dnf install llvm-devel
+    ```
+
+    ```bash macOS
+    brew install llvm
+    ```
+
+    ```bash Arch Linux
+    sudo pacman -S llvm
+    ```
+    </CodeGroup>
+
+    ### YVM Backend (Bytecode VM)
+    For the lightweight bytecode VM backend, you'll also need libffi:
+
+    <CodeGroup>
+    ```bash Ubuntu/Debian
+    sudo apt-get install libffi-dev
+    ```
+
+    ```bash Fedora/RHEL
+    sudo dnf install libffi-devel
+    ```
+
+    ```bash macOS
+    brew install libffi
+    ```
+
+    ```bash Arch Linux
+    sudo pacman -S libffi
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+## Building from Source
+
+### Clone the Repository
+
+```bash
+git clone https://github.com/your-org/yoyo-lang.git
+cd yoyo-lang
+git submodule update --init --recursive
+```
+
+### Configure Build Options
+
+Yoyo provides several build configuration options:
+
+<ParamField path="executor" type="combo" default="yvm">
+  Choose the execution backend:
+  - `llvm` - LLVM-based JIT compiler (high performance)
+  - `yvm` - Custom bytecode VM (lighter dependencies)
+  - `both` - Build both backends
+</ParamField>
+
+<ParamField path="llvm_static" type="boolean" default="true">
+  Link LLVM statically (only applies when using LLVM backend)
+</ParamField>
+
+<ParamField path="default_library" type="combo" default="static">
+  Build as:
+  - `static` - Static library
+  - `shared` - Shared library/DLL
+</ParamField>
+
+### Build with YVM Backend (Recommended for Getting Started)
+
+The YVM backend is lighter and has fewer dependencies:
+
+```bash
+meson setup builddir -Dexecutor=yvm
+meson compile -C builddir
+```
+
+### Build with LLVM Backend
+
+For maximum performance with LLVM JIT:
+
+```bash
+meson setup builddir -Dexecutor=llvm
+meson compile -C builddir
+```
+
+<Tip>
+  If you want to link LLVM dynamically instead of statically:
+  ```bash
+  meson setup builddir -Dexecutor=llvm -Dllvm_static=false
+  ```
+</Tip>
+
+### Build with Both Backends
+
+If you want to experiment with both execution engines:
+
+```bash
+meson setup builddir -Dexecutor=both
+meson compile -C builddir
+```
+
+### Build as Shared Library
+
+To build Yoyo as a shared library for dynamic linking:
+
+```bash
+meson setup builddir --default-library=shared
+meson compile -C builddir
+```
+
+## Running Tests
+
+After building, you can run the test suite to verify everything works:
+
+```bash
+meson test -C builddir
+```
+
+The test suite includes:
+- IR generation tests
+- Type checker tests
+- Operator overloading tests
+- Generic type resolution tests
+- Borrow checker tests
+- Union and interface tests
+
+## Build Output
+
+After a successful build, you'll find:
+
+<CardGroup cols={2}>
+  <Card title="Library" icon="book">
+    `builddir/libyoyo.a` (static) or `builddir/libyoyo.so` (shared)
+  </Card>
+  
+  <Card title="Test Executables" icon="flask">
+    `builddir/ir_gen_test` - Integration test runner
+  </Card>
+</CardGroup>
+
+## Optional Dependencies
+
+### Graphviz (for CFG visualization)
+
+If you want to visualize control flow graphs during development:
+
+<CodeGroup>
+```bash Ubuntu/Debian
+sudo apt-get install libgraphviz-dev
+```
+
+```bash Fedora/RHEL
+sudo dnf install graphviz-devel
+```
+
+```bash macOS
+brew install graphviz
+```
+</CodeGroup>
+
+When Graphviz is detected, CFG visualization features will be automatically enabled.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: LLVM not found">
+    Make sure LLVM development files are installed. On some systems, you may need to set the `LLVM_DIR` environment variable:
+    ```bash
+    export LLVM_DIR=/usr/lib/llvm-15/cmake
+    meson setup builddir -Dexecutor=llvm
+    ```
+  </Accordion>
+
+  <Accordion title="Error: bdw-gc not found">
+    The Boehm GC library is required. Install the development package:
+    ```bash
+    # Ubuntu/Debian
+    sudo apt-get install libgc-dev
+    
+    # If still not found, you may need to install from source
+    git clone https://github.com/ivmai/bdwgc.git
+    cd bdwgc
+    cmake -S . -B build
+    cmake --build build
+    sudo cmake --install build
+    ```
+  </Accordion>
+
+  <Accordion title="Linker errors with C++20">
+    Ensure your compiler fully supports C++20. You may need to update your compiler:
+    ```bash
+    # Ubuntu - use a newer GCC
+    sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+    sudo apt-get update
+    sudo apt-get install gcc-11 g++-11
+    export CXX=g++-11
+    ```
+  </Accordion>
+
+  <Accordion title="Submodule errors">
+    If you encounter errors related to submodules (yoyo-vm, minicoro):
+    ```bash
+    git submodule update --init --recursive --force
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Learn how to write your first Yoyo program and embed the engine in C++
+</Card>

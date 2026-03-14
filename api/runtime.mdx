@@ -1,0 +1,360 @@
+---
+title: 'Runtime'
+description: 'Coroutine-based runtime system for concurrent execution'
+---
+
+The `Runtime` class manages Yoyo's fiber-based concurrency model, handling coroutine scheduling and execution.
+
+## Runtime Class
+
+```cpp
+struct YOYO_API Runtime {
+    std::vector<mco_coro*> routs;
+    std::vector<mco_coro*> dead_coros;
+    std::unordered_map<mco_coro*, bool> is_externally_owned;
+    using TimePoint = std::chrono::time_point<std::chrono::steady_clock>;
+    std::vector<std::pair<mco_coro*, std::variant<mco_coro*, TimePoint, std::monostate>>> waiting;
+    
+    void run();
+    void add_job(mco_coro*);
+    void release_job(mco_coro*);
+};
+```
+
+## Methods
+
+### run()
+
+Executes the runtime's main loop, processing all scheduled coroutines and managing their lifecycle.
+
+```cpp
+void run();
+```
+
+<Note>
+This method runs all scheduled fibers until completion, handling sleep timers and inter-fiber synchronization.
+</Note>
+
+#### Example
+
+```cpp
+#include <yoyo/runtime.h>
+
+Yoyo::Runtime runtime;
+// Schedule some coroutines using add_job
+runtime.run();  // Process all scheduled work
+```
+
+---
+
+### add_job()
+
+Adds a coroutine to the runtime's execution queue.
+
+```cpp
+void add_job(mco_coro* coro);
+```
+
+#### Parameters
+
+<ParamField path="coro" type="mco_coro*" required>
+  Pointer to the coroutine to schedule for execution
+</ParamField>
+
+#### Example
+
+```cpp
+mco_coro* fiber = /* ... create fiber ... */;
+runtime.add_job(fiber);
+```
+
+---
+
+### release_job()
+
+Releases a coroutine from the runtime, cleaning up its resources.
+
+```cpp
+void release_job(mco_coro* coro);
+```
+
+#### Parameters
+
+<ParamField path="coro" type="mco_coro*" required>
+  Pointer to the coroutine to release
+</ParamField>
+
+<Note>
+This method properly cleans up the coroutine and removes it from the runtime's tracking structures.
+</Note>
+
+#### Example
+
+```cpp
+mco_coro* fiber = /* ... */;
+runtime.release_job(fiber);
+```
+
+## Public Members
+
+### routs
+
+```cpp
+std::vector<mco_coro*> routs;
+```
+
+Vector of active coroutines ready for execution.
+
+### dead_coros
+
+```cpp
+std::vector<mco_coro*> dead_coros;
+```
+
+Vector of completed coroutines pending cleanup.
+
+### is_externally_owned
+
+```cpp
+std::unordered_map<mco_coro*, bool> is_externally_owned;
+```
+
+Tracks whether each coroutine is owned by external code (true) or managed entirely by the runtime (false).
+
+### waiting
+
+```cpp
+std::vector<std::pair<mco_coro*, std::variant<mco_coro*, TimePoint, std::monostate>>> waiting;
+```
+
+Vector of coroutines waiting for events:
+- Waiting on another coroutine (`mco_coro*`)
+- Waiting until a time point (`TimePoint`)
+- Waiting indefinitely (`std::monostate`)
+
+---
+
+## Fiber Class
+
+The `Fiber` class provides a high-level interface for working with individual fibers, managing their parameters and return values.
+
+```cpp
+struct YOYO_API Fiber {
+    void* parameters;
+    void* return_val;
+    mco_coro* coro;
+    Runtime* rt;
+    
+    Fiber(void* param, void* ret_val, mco_coro* coro, Runtime* rt);
+    Fiber(const Fiber&) = delete;  // Non-copyable
+    
+    template<typename T>
+    T get();
+    
+    void forget();
+    ~Fiber();
+};
+```
+
+## Constructor
+
+### Fiber()
+
+Creates a Fiber wrapper for a coroutine.
+
+```cpp
+Fiber(void* param, void* ret_val, mco_coro* coro, Runtime* rt);
+```
+
+#### Parameters
+
+<ParamField path="param" type="void*" required>
+  Pointer to the fiber's input parameters
+</ParamField>
+
+<ParamField path="ret_val" type="void*" required>
+  Pointer to storage for the fiber's return value
+</ParamField>
+
+<ParamField path="coro" type="mco_coro*" required>
+  Pointer to the underlying coroutine
+</ParamField>
+
+<ParamField path="rt" type="Runtime*" required>
+  Pointer to the runtime managing this fiber
+</ParamField>
+
+<Note>
+Fiber is non-copyable to ensure proper resource management. Move semantics could be added if needed.
+</Note>
+
+## Methods
+
+### get()
+
+Retrieves the fiber's return value, transferring ownership and automatically releasing the fiber.
+
+```cpp
+template<typename T>
+T get();
+```
+
+#### Template Parameters
+
+<ParamField path="T" type="typename" required>
+  The type of the return value to extract
+</ParamField>
+
+#### Returns
+
+<ResponseField name="return" type="T">
+  The fiber's return value, moved from the internal storage
+</ResponseField>
+
+<Note>
+After calling `get()`, the fiber is automatically forgotten and released from the runtime.
+</Note>
+
+#### Example
+
+```cpp
+Yoyo::Fiber fiber(params, retval, coro, &runtime);
+
+// Wait for fiber to complete, then retrieve result
+int result = fiber.get<int>();
+std::cout << "Fiber returned: " << result << std::endl;
+// Fiber is now released
+```
+
+---
+
+### forget()
+
+Releases the fiber from the runtime without retrieving its return value.
+
+```cpp
+void forget();
+```
+
+#### Example
+
+```cpp
+Yoyo::Fiber fiber(params, retval, coro, &runtime);
+// Don't care about the return value
+fiber.forget();
+```
+
+## Public Members
+
+### parameters
+
+```cpp
+void* parameters;
+```
+
+Pointer to the fiber's input parameters.
+
+### return_val
+
+```cpp
+void* return_val;
+```
+
+Pointer to storage for the fiber's return value.
+
+### coro
+
+```cpp
+mco_coro* coro;
+```
+
+Pointer to the underlying coroutine. Set to `nullptr` after `forget()` is called.
+
+### rt
+
+```cpp
+Runtime* rt;
+```
+
+Pointer to the runtime managing this fiber.
+
+## Destructor
+
+The Fiber destructor automatically releases the coroutine if it hasn't been forgotten.
+
+```cpp
+~Fiber();
+```
+
+<Note>
+RAII ensures that fibers are properly cleaned up even if `get()` or `forget()` are not explicitly called.
+</Note>
+
+## Complete Usage Example
+
+```cpp
+#include <yoyo/runtime.h>
+#include <yoyo/engine.h>
+#include <iostream>
+
+// Example of using the Runtime in an Engine
+class MyEngine : public Yoyo::Engine {
+public:
+    void executeAsync() {
+        // The engine contains a Runtime instance (rt)
+        // Schedule work and run it
+        rt.run();
+    }
+};
+
+int main() {
+    MyEngine engine;
+    
+    // The runtime is managed by the engine
+    // You can access it via engine.rt if needed
+    
+    // Execute async work
+    engine.executeAsync();
+    
+    return 0;
+}
+```
+
+## Concurrency Example with Fibers
+
+```cpp
+// Example showing fiber management
+void processFiber(Yoyo::Runtime& runtime, mco_coro* coro, 
+                  void* params, void* retval) {
+    // Create a fiber wrapper
+    Yoyo::Fiber fiber(params, retval, coro, &runtime);
+    
+    // Option 1: Get the result (blocking until fiber completes)
+    auto result = fiber.get<int>();
+    std::cout << "Result: " << result << std::endl;
+    
+    // Option 2: Fire and forget
+    // fiber.forget();
+}
+
+// Example showing runtime job scheduling
+void scheduleWork(Yoyo::Runtime& runtime) {
+    mco_coro* job1 = /* create coroutine */;
+    mco_coro* job2 = /* create coroutine */;
+    
+    // Schedule multiple jobs
+    runtime.add_job(job1);
+    runtime.add_job(job2);
+    
+    // Run all scheduled work
+    runtime.run();
+    
+    // Clean up when done
+    runtime.release_job(job1);
+    runtime.release_job(job2);
+}
+```
+
+<Note>
+The Runtime uses the [minicoro](https://github.com/edubart/minicoro) library (`mco_coro*`) for coroutine implementation, providing lightweight fibers with minimal overhead.
+</Note>

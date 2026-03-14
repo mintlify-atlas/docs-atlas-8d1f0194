@@ -1,0 +1,387 @@
+---
+title: Memory Model
+description: Understand Yoyo's memory safety guarantees, ownership semantics, and garbage collection
+---
+
+Yoyo is designed as a memory-safe language that prevents common memory errors like use-after-free, double-free, and null pointer dereferences. The memory model combines ownership semantics with garbage collection for flexible memory management.
+
+## Ownership and References
+
+Yoyo distinguishes between owning and non-owning types:
+
+### Owning Types
+
+Values that own their data:
+
+```yoyo
+Game: struct = {
+    data: [Player; 9],      // Owned array
+    player: Player           // Owned enum value
+}
+
+main: fn = {
+    game: mut = Game::new();  // game owns the Game instance
+    // When game goes out of scope, the data is freed
+}
+```
+
+### Non-Owning References
+
+Yoyo has three kinds of non-owning references:
+
+<Tabs>
+  <Tab title="Immutable Reference &T">
+    Provides read-only access without taking ownership:
+    
+    ```yoyo
+    render: fn (&this) = {
+        // Can read this.data but not modify it
+        row1 := " ${player_text(&this.data, 0)}";
+    }
+    
+    player_text: fn (p: &[Player; 9], alt: i32) -> str = {
+        // Read from p without owning it
+        if (*(*p)[alt] == Player::X) 
+            return "X";
+        return "${alt}";
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Mutable Reference &mut T">
+    Provides read-write access without taking ownership:
+    
+    ```yoyo
+    append: fn (&mut this, value: T) = {
+        // Can modify this.first
+        if |val| (this.first) {
+            last: mut = val;
+            last.next = gcnew Node::<T>{.data = value, .next = null};
+        } else {
+            this.first = gcnew Node::<T>{.data = value, .next = null};
+        }
+    }
+    
+    play: fn (&mut this) = {
+        // Modify this.data and this.player
+        *this.data[idx] = this.player;
+        this.player = this.player.cycle();
+    }
+    ```
+  </Tab>
+  
+  <Tab title="GC Reference ^T">
+    Garbage-collected pointers for shared ownership:
+    
+    ```yoyo
+    Node: struct::<T> = {
+        data: T,
+        next: (^Node::<T>)?  // Optional GC pointer
+    }
+    
+    LinkedList: struct::<T> = {
+        first: (^Node::<T>)?,
+        
+        append: fn (&mut this, value: T) = {
+            // Allocate with gcnew
+            node := gcnew Node::<T>{
+                .data = value, 
+                .next = null
+            };
+            this.first = node;
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Mutability
+
+Yoyo requires explicit mutability declarations:
+
+### Immutable by Default
+
+```yoyo
+value: i32 = 42;
+// value = 43;  // ERROR: Cannot assign to immutable variable
+
+player: Player = Player::X;
+// player = Player::O;  // ERROR
+```
+
+### Explicit Mutability
+
+```yoyo
+value: mut i32 = 42;
+value = 43;  // OK
+
+game: mut = Game::new();
+game.player = Player::O;  // OK
+```
+
+### Mutable References
+
+Mutability applies to references too:
+
+```yoyo
+// Immutable reference to immutable data
+read_only: fn (data: &i32) = {
+    // Can read *data but not modify
+}
+
+// Mutable reference allows modification
+modify: fn (data: &mut i32) = {
+    *data = 100;  // OK
+}
+```
+
+## Memory Allocation
+
+### Stack Allocation
+
+Local variables are stack-allocated by default:
+
+```yoyo
+main: fn = {
+    game: mut = Game::new();  // Stack allocated
+    value: i32 = 42;          // Stack allocated
+}  // Automatically freed when scope ends
+```
+
+### Heap Allocation with GC
+
+Use `gcnew` for garbage-collected heap allocation:
+
+```yoyo
+append: fn (&mut this, value: T) = {
+    // Allocate on GC heap
+    node := gcnew Node::<T>{
+        .data = value, 
+        .next = null
+    };
+    
+    last.next = gcnew Node::<T>{
+        .data = value, 
+        .next = null
+    };
+}
+```
+
+<Note>
+GC-allocated objects are automatically freed when no more references exist.
+</Note>
+
+## Dereferencing
+
+Use `*` to dereference pointers and references:
+
+```yoyo
+// Array element access returns a reference
+first := *this.data[0];  // Dereference to get Player value
+
+if (*this.data[0] == *this.data[1]) {
+    // Compare dereferenced values
+}
+
+// Optional GC pointer dereferencing
+if |node| (this.curr) {
+    this.curr = node.next;   // node is already unwrapped
+    return &node.data;        // Borrow from dereferenced node
+}
+```
+
+## Optional Types and Null Safety
+
+Yoyo uses optional types to prevent null pointer dereferences:
+
+### Optional Syntax
+
+```yoyo
+Node: struct::<T> = {
+    data: T,
+    next: (^Node::<T>)?  // Optional GC pointer
+}
+
+Composite: struct = {
+    value1: i32,
+    value2: f32
+}
+
+opt: mut Composite? = null;  // Explicitly optional
+```
+
+### Safe Unwrapping
+
+Use pattern matching to safely access optional values:
+
+```yoyo
+// If-let pattern
+if |val| (this.first) {
+    // val is the unwrapped value
+    last: mut = val;
+} else {
+    // this.first was null
+}
+
+// Null propagation operator
+the_val := opt?.value1;  // Returns i32? (propagates null)
+
+// Null checking
+if (opt !is null) {
+    // opt is guaranteed to have a value
+    opt.value();  // Safe to call
+}
+```
+
+### Optional References
+
+Functions can return optional references:
+
+```yoyo
+access_array_no_panic: fn (arr: &mut [i32], idx: usize) -> (&mut i32)? = {
+    if (idx >= arr.size()) 
+        return null;
+    return &mut arr[idx];
+}
+
+// Must be immediately pattern matched
+match access_array_no_panic(arr, 1) {
+    Some(val) -> { /* val is &mut i32 */ }
+    None -> { /* Out of bounds */ }
+}
+```
+
+<Warning>
+Optional references cannot be stored - they must be immediately unwrapped and used.
+</Warning>
+
+## Ownership Models
+
+Structs can have different ownership semantics:
+
+```cpp
+enum class Ownership {
+    Value,      // Owned value type
+    Reference,  // Reference type (non-owning)
+    GC          // Garbage collected
+};
+```
+
+### Value Ownership
+
+Default for most structs:
+
+```yoyo
+Game: struct = {  // Value ownership
+    data: [Player; 9],
+    player: Player
+}
+```
+
+### Reference Ownership
+
+Marked with `:&` suffix:
+
+```yoyo
+LinkedListIterator: struct:&::<T> impl core::Iterator::<&T> = {
+    curr: (^Node::<T>)?,
+    // ...
+}
+```
+
+### GC Ownership
+
+Marked with `:^` suffix (experimental):
+
+```yoyo
+// GC-managed struct (syntax may evolve)
+SharedData: struct:^ = {
+    // ...
+}
+```
+
+## Move Semantics
+
+Compound assignment operators use move semantics:
+
+```yoyo
+// From operator_overloading.md:
+// (val += other) is expanded to:
+// val = val + other  // val is moved into the + operation
+```
+
+## Memory Safety Guarantees
+
+<Steps>
+  <Step title="No Null Pointer Dereferences">
+    Optional types force explicit null handling through pattern matching.
+  </Step>
+  
+  <Step title="No Use-After-Free">
+    GC-managed pointers prevent accessing freed memory.
+  </Step>
+  
+  <Step title="No Double-Free">
+    Ownership system ensures each value is freed exactly once.
+  </Step>
+  
+  <Step title="No Data Races (Planned)">
+    Reference rules will prevent concurrent mutable access.
+  </Step>
+</Steps>
+
+## Advanced Features
+
+### Views and Slices
+
+Yoyo supports non-owning views into arrays and strings:
+
+```yoyo
+// Array views (syntax evolving)
+[T]:&      // Non-owning immutable view
+[T]:&mut   // Non-owning mutable view  
+[T]:^      // GC view
+```
+
+<Note>
+View syntax is being redesigned to use `[T]:.` as a non-concrete type.
+</Note>
+
+### Destructor Semantics
+
+Structs can have destructors for cleanup:
+
+```cpp
+// From statement.h:
+class ClassDeclaration {
+    std::string destructor_name;
+    std::optional<bool> is_trivially_destructible;
+    // ...
+};
+```
+
+Trivially destructible types don't require cleanup code.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Prefer Immutability" icon="lock">
+    Use immutable variables and references by default. Only add `mut` when necessary.
+  </Card>
+  
+  <Card title="Use References for Parameters" icon="arrow-right">
+    Pass large structs by reference (`&` or `&mut`) to avoid copying.
+  </Card>
+  
+  <Card title="Handle Optionals Explicitly" icon="question">
+    Always use pattern matching or null checks before accessing optional values.
+  </Card>
+  
+  <Card title="Minimize GC Allocations" icon="recycle">
+    Prefer stack allocation when possible. Use GC (`gcnew`) for shared ownership.
+  </Card>
+</CardGroup>
+
+<Warning>
+Yoyo's memory model is still evolving as the language is in active research and development.
+</Warning>

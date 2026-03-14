@@ -1,80 +1,473 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Write your first Yoyo program and learn how to embed the engine in C++
 ---
 
-## Get started in three steps
+This guide will help you write your first Yoyo program and understand how to embed the Yoyo engine in your C++ applications.
 
-Get your documentation site running locally and make your first customization.
+## Your First Yoyo Program
 
-### Step 1: Set up your local environment
+Yoyo's syntax is heavily inspired by [cpp2/cppfront](https://github.com/hsutter/cppfront) with some derivations. All declarations follow a consistent pattern:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+```
+name: kind = value;
+```
 
-### Step 2: Deploy your changes
+### Hello World
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Create a file named `hello.yoyo`:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+```yoyo hello.yoyo
+main: fn = {
+    "Hello, World!".test::print();
+}
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  In this example, `test::print` is a function provided by the C++ host application. We'll show you how to register it in the embedding section below.
 </Note>
+
+### Basic Syntax Examples
+
+#### Variables and Type Inference
+
+```yoyo
+main: fn = {
+    // Type inference with :=
+    name := "Alice";
+    age := 30;
+    
+    // Explicit type annotation
+    score: i32 = 100;
+    
+    // Mutable variables
+    counter: mut = 0;
+    counter = counter + 1;
+    
+    "Name: ${name}, Age: ${age}".test::print();
+}
+```
+
+<Tip>
+  The `kind` (type annotation) can be omitted for variables when using type inference with `:=`.
+</Tip>
+
+#### Functions
+
+```yoyo
+// Function with explicit return type
+add: fn(a: i32, b: i32) -> i32 = {
+    return a + b;
+}
+
+// Single-statement function (implicit block)
+double: fn(x: i32) -> i32 = return x * 2;
+
+// Function with no return value
+greet: fn(name: &str) = {
+    "Hello, ${name}!".test::print();
+}
+
+main: fn = {
+    result := add(5, 3);
+    "5 + 3 = ${result}".test::print();
+    
+    greet("World");
+}
+```
+
+#### Structs and Methods
+
+```yoyo
+Vector2: struct = {
+    x: i32,
+    y: i32,
+    
+    // Static constructor function
+    new: fn(x: i32, y: i32) -> Vector2 = {
+        return Vector2{ .x, .y };
+    }
+    
+    // Instance method (note &this parameter)
+    to_str: fn(&this) -> str = {
+        return "{ ${this.x}, ${this.y} }";
+    }
+    
+    // Mutable method
+    scale: fn(&mut this, factor: i32) = {
+        this.x = this.x * factor;
+        this.y = this.y * factor;
+    }
+}
+
+main: fn = {
+    vec: mut = Vector2::new(10, 20);
+    vec.to_str().test::print();
+    
+    vec.scale(2);
+    "Scaled: ${vec.to_str()}".test::print();
+}
+```
+
+#### Generics
+
+```yoyo
+// Generic struct
+Wrapper: struct::<T> = {
+    data: T,
+    
+    new: fn(value: T) -> Wrapper::<T> = {
+        return Wrapper::<T>{ .data = value };
+    }
+}
+
+// Generic function
+identity: fn::<T>(value: T) -> T = return value;
+
+main: fn = {
+    int_wrapper := Wrapper::<i32>::new(42);
+    str_wrapper := Wrapper::<str>::new("hello");
+    
+    val := identity(100);
+}
+```
+
+#### Enums and Pattern Matching
+
+```yoyo
+Player: enum = { X, O, None }
+
+player_to_str: fn(p: Player) -> str = {
+    if (p == Player::X) 
+        return "X";
+    else if (p == Player::O)
+        return "O";
+    return "None";
+}
+
+main: fn = {
+    current := Player::X;
+    player_to_str(current).test::print();
+}
+```
+
+#### Unions (Tagged Unions)
+
+```yoyo
+Color: union = {
+    ColorRGB: struct = { r: u8, g: u8, b: u8, a: u8 }
+    
+    RGB: ColorRGB,
+    Hex: u32,
+    
+    to_str: fn(&this) -> str = {
+        if |rgb| ((*this) as RGB) 
+            return "rgb: ${rgb.r}, ${rgb.g}, ${rgb.b}, ${rgb.a}";
+        else if |hex| ((*this) as Hex) 
+            return "hex: ${hex}";
+        else 
+            return "Undefined";
+    }
+}
+
+main: fn = {
+    c1 := Color::RGB(Color::ColorRGB{.r = 255, .g = 100, .b = 50, .a = 255});
+    c2 := Color::Hex(0xFF6432);
+    
+    c1.to_str().test::print();
+    c2.to_str().test::print();
+}
+```
+
+#### Operator Overloading
+
+```yoyo
+Vec2: struct::<T> = {
+    x: T, y: T,
+    new: fn(x: T, y: T) -> Vec2::<T> = return Vec2::<T>{ .x, .y };
+}
+
+// Dot product operator
+operator: *::<T>(a: Vec2::<T>, b: Vec2::<T>) -> T = {
+    return a.x * b.x + a.y * b.y;
+}
+
+main: fn = {
+    v1 := Vec2::<i32>::new(3, 4);
+    v2 := Vec2::<i32>::new(2, 1);
+    
+    dot_product := v1 * v2;  // Uses custom operator
+    "Dot product: ${dot_product}".test::print();
+}
+```
+
+#### Static Arrays
+
+```yoyo
+main: fn = {
+    // Fixed-size array
+    numbers: [i32; 5] = [1, 2, 3, 4, 5];
+    
+    // Array indexing
+    first := numbers[0];
+    "First element: ${first}".test::print();
+    
+    // Array literal with repeat
+    zeros: [i32; 10] = [0; 10];
+}
+```
+
+## Embedding Yoyo in C++
+
+Yoyo is designed to be embedded in C++ applications. Here's how to integrate it:
+
+### Basic Embedding with YVM Backend
+
+```cpp main.cpp
+#include <yvm/yvm_engine.h>
+#include <yvm/app_module.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
+// Example native function callable from Yoyo
+void print_from_cpp(void* str) {
+    std::string_view sv = Yoyo::Engine::viewString(str);
+    std::cout << sv << std::endl;
+}
+
+int main() {
+    // Create the Yoyo engine
+    Yoyo::YVMEngine engine;
+    
+    // Create an application module for native functions
+    auto test_module = engine.addAppModule("test");
+    
+    // Register C++ functions callable from Yoyo
+    test_module->addFunction(
+        "(x: &str) -> void",  // Yoyo signature
+        print_from_cpp,        // C++ function pointer
+        "print"                // Function name in Yoyo
+    );
+    
+    // Load and compile Yoyo source code
+    std::string source = R"(
+        main: fn = {
+            "Hello from Yoyo!".test::print();
+        }
+    )";
+    
+    auto module = engine.addModule("main", source);
+    
+    // Compile all modules
+    if (!engine.compile()) {
+        std::cerr << "Compilation failed!" << std::endl;
+        return 1;
+    }
+    
+    // Prepare for execution
+    engine.prepareForExecution();
+    
+    // Find and create fiber for the main function
+    auto main_fn = engine.findFunction(module, "main::main");
+    if (!main_fn) {
+        std::cerr << "Could not find main function!" << std::endl;
+        return 1;
+    }
+    
+    auto fiber = engine.createFiber(*main_fn);
+    
+    // Execute
+    engine.execute();
+    
+    return 0;
+}
+```
+
+### Registering Native Functions
+
+You can expose C++ functions to Yoyo with type-safe signatures:
+
+```cpp
+// Function with parameters and return value
+int32_t add_numbers(int32_t a, int32_t b) {
+    return a + b;
+}
+
+// Function receiving Yoyo string
+void print_string(void* yoyo_str) {
+    auto sv = Yoyo::Engine::viewString(yoyo_str);
+    std::cout << sv << std::endl;
+}
+
+// Function with boolean and assertions
+void test_assert(bool condition, void* message) {
+    if (!condition) {
+        auto msg = Yoyo::Engine::viewString(message);
+        std::cerr << "Assertion failed: " << msg << std::endl;
+        std::abort();
+    }
+}
+
+// Register functions in engine
+Yoyo::YVMEngine engine;
+auto module = engine.addAppModule("math");
+
+module->addFunction("(a: i32, b: i32) -> i32", add_numbers, "add");
+module->addFunction("(x: &str) -> void", print_string, "print");
+module->addFunction("(cond: bool, msg: &str) -> void", test_assert, "assert");
+```
+
+### Passing Parameters to Yoyo Functions
+
+```cpp
+// Define a Yoyo function that takes parameters
+std::string source = R"(
+    greet: fn(name: &str, age: i32) = {
+        "Hello ${name}, you are ${age} years old".test::print();
+    }
+)";
+
+engine.addModule("main", source);
+engine.compile();
+engine.prepareForExecution();
+
+// Find the function
+auto greet_fn = engine.findFunction(module, "main::greet");
+auto fiber = engine.createFiber(*greet_fn);
+
+// Set parameters (fiber.parameters is a void* to the parameter struct)
+// You'll need to construct the appropriate parameter structure
+// based on the function signature
+
+engine.execute();
+```
+
+### Loading from Files
+
+```cpp
+std::string loadFile(const std::string& path) {
+    std::ifstream file(path);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+int main() {
+    Yoyo::YVMEngine engine;
+    
+    // Load source from file
+    std::string source = loadFile("program.yoyo");
+    
+    auto module = engine.addModule("program.yoyo", source);
+    
+    // Continue with compilation and execution...
+}
+```
+
+## Building Your Embedded Application
+
+Create a `meson.build` for your application:
+
+```meson
+project('my_yoyo_app', 'cpp', default_options: ['cpp_std=c++20'])
+
+# Add Yoyo as a subproject or dependency
+yoyo_dep = dependency('yoyo')  # Or use subproject
+
+executable(
+    'my_app',
+    'main.cpp',
+    dependencies: [yoyo_dep]
+)
+```
+
+Or with CMake:
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(my_yoyo_app)
+
+set(CMAKE_CXX_STANDARD 20)
+
+# Link against Yoyo library
+find_library(YOYO_LIB yoyo PATHS path/to/yoyo/builddir)
+
+add_executable(my_app main.cpp)
+target_include_directories(my_app PRIVATE path/to/yoyo/include)
+target_link_libraries(my_app ${YOYO_LIB} gc ffi)
+```
+
+## Complete Example: Linked List
+
+Here's a more complex example showing generics, iterators, and interfaces:
+
+```yoyo linked_list.yoyo
+Node: struct::<T> = {
+    data: T,
+    next: (^Node::<T>)?
+}
+
+LinkedList: struct::<T> = {
+    first: (^Node::<T>)?,
+    
+    new: fn -> LinkedList::<T> = {
+        return LinkedList::<T>{ .first = null };
+    }
+    
+    append: fn(&mut this, value: T) = {
+        if |val| (this.first) {
+            last: mut = val;
+            should_loop: mut = true;
+            while (should_loop) {
+                if |nxt| (last.next) 
+                    last = nxt;
+                else 
+                    should_loop = false;
+            }
+            last.next = gcnew Node::<T>{ .data = value, .next = null };
+        } else {
+            this.first = gcnew Node::<T>{ .data = value, .next = null };
+        }
+    }
+}
+
+iter: fn::<T>(list: &LinkedList::<T>) -> LinkedListIterator::<T> = {
+    return LinkedListIterator::<T>{ .curr = list.first };
+}
+
+main: fn = {
+    list: mut = LinkedList::<str>::new();
+    list.append("First");
+    list.append("Second");
+    list.append("Third");
+    
+    for (item in list.iter()) {
+        item.test::print();
+    }
+}
+```
+
+<Note>
+  Notice the `gcnew` keyword for garbage-collected allocations and the `^` pointer type. Yoyo uses the Boehm GC for automatic memory management.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Language Reference" icon="book" href="/language/syntax">
+    Deep dive into Yoyo's syntax and features
+  </Card>
+  
+  <Card title="Type System" icon="shapes" href="/language/types">
+    Learn about Yoyo's static type system and generics
+  </Card>
+  
+  <Card title="Memory Model" icon="memory" href="/language/memory-model">
+    Understand borrowing, ownership, and garbage collection
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/engine">
+    Complete C++ API documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,645 @@
+---
+title: 'C++ Interoperability'
+description: 'Seamlessly integrate C++ code with Yoyo scripts'
+---
+
+## Overview
+
+Yoyo's interoperability layer enables bidirectional communication between C++ and Yoyo code. You can:
+
+- Call C++ functions from Yoyo scripts
+- Pass data between C++ and Yoyo using type-safe interfaces
+- Handle Yoyo strings and complex types in C++
+- Link external native libraries
+- Create fibers and manage concurrency from C++
+
+## Calling C++ from Yoyo
+
+### Basic Function Calls
+
+Register C++ functions through application modules:
+
+```cpp
+#include <yvm/yvm_engine.h>
+#include <yvm/app_module.h>
+
+// Simple C++ function
+int32_t square(int32_t x) {
+    return x * x;
+}
+
+int main() {
+    Yoyo::YVMEngine engine;
+    auto* app_mod = engine.addAppModule("math");
+    
+    // Register function
+    app_mod->addFunction(
+        "(x: i32) -> i32",
+        square,
+        "square"
+    );
+    
+    // Use in Yoyo
+    std::string source = R"(
+        import math
+        result: i32 = math::square(5);  // result = 25
+    )";
+    
+    engine.addModule("main", source);
+    engine.compile();
+    engine.prepareForExecution();
+    engine.execute();
+}
+```
+
+### Function Signature Format
+
+Yoyo function signatures follow this syntax:
+
+```
+(param1: Type1, param2: Type2, ...) -> ReturnType
+```
+
+Examples:
+
+| Signature | Description |
+|-----------|-------------|
+| `"() -> void"` | No parameters, no return value |
+| `"(x: i32) -> i32"` | One integer parameter, returns integer |
+| `"(a: f64, b: f64) -> f64"` | Two floats, returns float |
+| `"(msg: &str) -> void"` | String reference parameter |
+| `"() -> str"` | Returns owned string |
+| `"(x: bool, y: &str) -> i32"` | Mixed parameters |
+
+<Warning>
+The signature string is parsed at runtime. If the signature is invalid, `addFunction` returns `Result::InvalidSignature`.
+</Warning>
+
+## String Handling
+
+Yoyo strings use a custom memory layout. Use the provided utilities to safely access them.
+
+### Yoyo String Structure
+
+```cpp
+struct YoyoString {
+    char* text;        // Pointer to character data
+    uint64_t size;     // Length of string (excluding null terminator)
+    uint64_t capacity; // Allocated capacity
+};
+```
+
+### Reading Strings from Yoyo
+
+Use `Engine::viewString()` to convert Yoyo strings to C++ `string_view`:
+
+```cpp
+void print_message(void* yoyo_str) {
+    std::string_view message = Yoyo::Engine::viewString(yoyo_str);
+    std::cout << message << std::endl;
+}
+
+// Register
+app_mod->addFunction(
+    "(msg: &str) -> void",
+    print_message,
+    "print"
+);
+```
+
+<CodeGroup>
+  ```cpp Reading String
+  void process_string(void* str_ptr) {
+      auto view = Yoyo::Engine::viewString(str_ptr);
+      
+      // Use as string_view
+      std::cout << "Length: " << view.length() << std::endl;
+      std::cout << "Content: " << view << std::endl;
+      
+      // Convert to std::string if needed
+      std::string owned(view);
+  }
+  ```
+
+  ```cpp Comparing Strings
+  void test_equality(void* str1, void* str2) {
+      auto view1 = Yoyo::Engine::viewString(str1);
+      auto view2 = Yoyo::Engine::viewString(str2);
+      
+      if (view1 == view2) {
+          std::cout << "Strings are equal" << std::endl;
+      }
+  }
+  ```
+</CodeGroup>
+
+### Creating Strings for Yoyo
+
+To return strings to Yoyo, populate the string structure:
+
+```cpp
+void get_greeting(void* out_str) {
+    auto* str = reinterpret_cast<YoyoString*>(out_str);
+    
+    const char* message = "Hello from C++!";
+    size_t len = strlen(message);
+    
+    str->text = static_cast<char*>(malloc(len + 1));
+    str->size = len;
+    str->capacity = len;
+    strcpy(str->text, message);
+}
+
+// Register
+app_mod->addFunction(
+    "() -> str",
+    get_greeting,
+    "get_greeting"
+);
+```
+
+Usage in Yoyo:
+```yoyo
+import myapp
+
+greeting: str = myapp::get_greeting();
+print(greeting);  // "Hello from C++!"
+```
+
+<Note>
+Memory allocated for Yoyo strings is managed by Yoyo's garbage collector (Boehm GC). Use `malloc` or `GC_malloc` for string data.
+</Note>
+
+## Type Conversions
+
+### Primitive Types
+
+Primitive types map directly:
+
+```cpp
+int32_t add(int32_t a, int32_t b) { return a + b; }
+uint64_t hash(uint64_t value) { return value * 31; }
+double sqrt_approx(double x) { return std::sqrt(x); }
+bool is_positive(int32_t x) { return x > 0; }
+
+app_mod->addFunction("(a: i32, b: i32) -> i32", add, "add");
+app_mod->addFunction("(value: u64) -> u64", hash, "hash");
+app_mod->addFunction("(x: f64) -> f64", sqrt_approx, "sqrt");
+app_mod->addFunction("(x: i32) -> bool", is_positive, "is_positive");
+```
+
+### Void Functions
+
+```cpp
+void log_info(void* message) {
+    auto msg = Yoyo::Engine::viewString(message);
+    std::cout << "[INFO] " << msg << std::endl;
+}
+
+app_mod->addFunction("(msg: &str) -> void", log_info, "log_info");
+```
+
+### Multiple Parameters
+
+```cpp
+int32_t clamp(int32_t value, int32_t min, int32_t max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+}
+
+app_mod->addFunction(
+    "(value: i32, min: i32, max: i32) -> i32",
+    clamp,
+    "clamp"
+);
+```
+
+## Enums and Constants
+
+### Exposing Enums
+
+```cpp
+// C++ enum
+enum LogLevel {
+    DEBUG = 0,
+    INFO = 1,
+    WARNING = 2,
+    ERROR = 3
+};
+
+// Register in Yoyo
+app_mod->addEnum("LogLevel", {
+    {"Debug", DEBUG},
+    {"Info", INFO},
+    {"Warning", WARNING},
+    {"Error", ERROR}
+});
+
+// Use enum values in C++ functions
+void log_with_level(int32_t level, void* message) {
+    auto msg = Yoyo::Engine::viewString(message);
+    const char* level_str;
+    
+    switch (level) {
+        case DEBUG:   level_str = "DEBUG"; break;
+        case INFO:    level_str = "INFO"; break;
+        case WARNING: level_str = "WARNING"; break;
+        case ERROR:   level_str = "ERROR"; break;
+        default:      level_str = "UNKNOWN";
+    }
+    
+    std::cout << "[" << level_str << "] " << msg << std::endl;
+}
+
+app_mod->addFunction(
+    "(level: LogLevel, msg: &str) -> void",
+    log_with_level,
+    "log"
+);
+```
+
+Usage:
+```yoyo
+import logger
+
+logger::log(logger::LogLevel::Info, "Application started");
+logger::log(logger::LogLevel::Error, "Something went wrong");
+```
+
+## Calling Yoyo from C++
+
+### Finding Functions
+
+YVM engine provides function lookup:
+
+```cpp
+std::optional<FunctionTy> findFunction(ModuleBase* mod, 
+                                       const std::string& function_name);
+```
+
+<Warning>
+Function names must be fully qualified with the module hash: `module_hash + function_name`
+</Warning>
+
+### Creating and Running Fibers
+
+```cpp
+#include <yvm/yvm_engine.h>
+
+Yoyo::YVMEngine engine;
+auto* app_mod = engine.addAppModule("test");
+
+std::string source = R"(
+    @[public]
+    compute: fn(x: i32, y: i32) -> i32 = {
+        return x * x + y * y;
+    }
+)";
+
+auto* mod = engine.addModule("math", source);
+
+if (engine.compile()) {
+    engine.prepareForExecution();
+    
+    // Find function (note: module_hash prefix)
+    std::string func_name = mod->module_hash + "compute";
+    auto func_opt = engine.findFunction(mod, func_name);
+    
+    if (func_opt) {
+        // Create fiber
+        auto fiber = engine.createFiber(*func_opt);
+        
+        // Execute all fibers
+        engine.execute();
+        
+        // Get result (if function returns a value)
+        // int32_t result = fiber.get<int32_t>();
+    }
+}
+```
+
+### Passing Parameters to Fibers
+
+For parameterized functions, set up the fiber's parameters:
+
+```cpp
+// This is an advanced use case
+// The Fiber struct has a parameters field:
+struct Fiber {
+    void* parameters;    // Pointer to parameter data
+    void* return_val;    // Pointer to return value storage
+    mco_coro* coro;
+    Runtime* rt;
+};
+```
+
+<Warning>
+Direct parameter passing requires knowledge of Yoyo's ABI and calling conventions. For most use cases, prefer calling C++ from Yoyo rather than the reverse.
+</Warning>
+
+## External Library Linking
+
+Link native shared libraries for FFI:
+
+### Adding Libraries
+
+```cpp
+// Link system libraries
+engine.addDynamicLibrary("libm.so");        // Linux math library
+engine.addDynamicLibrary("libpthread.so");  // POSIX threads
+
+// Link custom libraries
+engine.addDynamicLibrary("./build/libmylib.so");
+engine.addDynamicLibrary("C:\\libs\\mylib.dll");  // Windows
+```
+
+### Platform-Specific Libraries
+
+<CodeGroup>
+  ```cpp Linux
+  engine.addDynamicLibrary("libSDL2.so");
+  engine.addDynamicLibrary("libGL.so");
+  ```
+
+  ```cpp macOS
+  engine.addDynamicLibrary("libSDL2.dylib");
+  engine.addDynamicLibrary("/usr/lib/libGL.dylib");
+  ```
+
+  ```cpp Windows
+  engine.addDynamicLibrary("SDL2.dll");
+  engine.addDynamicLibrary("OpenGL32.dll");
+  ```
+</CodeGroup>
+
+### Finding Native Functions (YVM)
+
+YVM engine can look up symbols from loaded libraries:
+
+```cpp
+void* findNativeFunction(const std::string& name);
+```
+
+Example:
+```cpp
+engine.addDynamicLibrary("libm.so");
+auto* sin_func = engine.findNativeFunction("sin");
+if (sin_func) {
+    std::cout << "Found sin function" << std::endl;
+}
+```
+
+## Advanced Interop Patterns
+
+### Callback Functions
+
+Pass C++ callbacks to Yoyo:
+
+```cpp
+// Global callback storage
+std::function<void(int32_t)> g_callback;
+
+void register_callback(void* /* unused */) {
+    g_callback = [](int32_t value) {
+        std::cout << "Callback invoked with: " << value << std::endl;
+    };
+}
+
+void invoke_callback(int32_t value) {
+    if (g_callback) {
+        g_callback(value);
+    }
+}
+
+app_mod->addFunction("() -> void", register_callback, "register_callback");
+app_mod->addFunction("(value: i32) -> void", invoke_callback, "invoke");
+```
+
+### Stateful C++ Objects
+
+```cpp
+class Counter {
+    int32_t count = 0;
+public:
+    int32_t increment() { return ++count; }
+    int32_t get() const { return count; }
+    void reset() { count = 0; }
+};
+
+// Global instance (consider using a registry for multiple instances)
+Counter g_counter;
+
+int32_t counter_increment() { return g_counter.increment(); }
+int32_t counter_get() { return g_counter.get(); }
+void counter_reset() { g_counter.reset(); }
+
+app_mod->addFunction("() -> i32", counter_increment, "increment");
+app_mod->addFunction("() -> i32", counter_get, "get");
+app_mod->addFunction("() -> void", counter_reset, "reset");
+```
+
+Usage:
+```yoyo
+import counter
+
+counter::increment();  // 1
+counter::increment();  // 2
+value: i32 = counter::get();  // 2
+counter::reset();
+```
+
+### Error Handling
+
+```cpp
+// Return error codes
+int32_t divide(int32_t a, int32_t b) {
+    if (b == 0) return -1;  // Error code
+    return a / b;
+}
+
+app_mod->addFunction("(a: i32, b: i32) -> i32", divide, "divide");
+```
+
+```yoyo
+import math
+
+result: i32 = math::divide(10, 2);  // 5
+error: i32 = math::divide(10, 0);   // -1
+
+if error == -1 {
+    print("Division by zero error");
+}
+```
+
+### Assertions for Testing
+
+```cpp
+void test_assert(bool condition, void* message) {
+    if (!condition) {
+        auto msg = Yoyo::Engine::viewString(message);
+        std::cerr << "Assertion failed: " << msg << std::endl;
+        std::abort();
+    }
+}
+
+app_mod->addFunction(
+    "(cond: bool, msg: &str) -> void",
+    test_assert,
+    "assert"
+);
+```
+
+```yoyo
+import test
+
+test::assert(2 + 2 == 4, "Math works");
+test::assert(factorial(5) == 120, "Factorial is correct");
+```
+
+## Complete Integration Example
+
+```cpp
+#include <yvm/yvm_engine.h>
+#include <yvm/app_module.h>
+#include <iostream>
+#include <cmath>
+
+// Math functions
+double compute_distance(double x1, double y1, double x2, double y2) {
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+int32_t random_int(int32_t min, int32_t max) {
+    return min + (std::rand() % (max - min + 1));
+}
+
+// Logging
+void log_debug(void* msg) {
+    std::cout << "[DEBUG] " << Yoyo::Engine::viewString(msg) << std::endl;
+}
+
+void log_error(void* msg) {
+    std::cerr << "[ERROR] " << Yoyo::Engine::viewString(msg) << std::endl;
+}
+
+int main() {
+    Yoyo::YVMEngine engine;
+    
+    // Math module
+    auto* math_mod = engine.addAppModule("math");
+    math_mod->addFunction(
+        "(x1: f64, y1: f64, x2: f64, y2: f64) -> f64",
+        compute_distance,
+        "distance"
+    );
+    math_mod->addFunction(
+        "(min: i32, max: i32) -> i32",
+        random_int,
+        "random"
+    );
+    
+    // Logging module
+    auto* log_mod = engine.addAppModule("log");
+    log_mod->addFunction("(msg: &str) -> void", log_debug, "debug");
+    log_mod->addFunction("(msg: &str) -> void", log_error, "error");
+    
+    log_mod->addEnum("Level", {
+        {"Debug", 0},
+        {"Info", 1},
+        {"Warning", 2},
+        {"Error", 3}
+    });
+    
+    // Yoyo script
+    std::string source = R"(
+        import math
+        import log
+        
+        @[public]
+        main: fn() -> void = {
+            log::debug("Starting computation...");
+            
+            dist: f64 = math::distance(0.0, 0.0, 3.0, 4.0);
+            log::debug("Distance: " + dist.to_string());
+            
+            rand_val: i32 = math::random(1, 100);
+            log::debug("Random value: " + rand_val.to_string());
+            
+            if dist > 10.0 {
+                log::error("Distance too large!");
+            }
+        }
+    )";
+    
+    auto* mod = engine.addModule("app", source);
+    
+    if (engine.compile()) {
+        engine.prepareForExecution();
+        
+        auto main_fn = engine.findFunction(mod, mod->module_hash + "main");
+        if (main_fn) {
+            auto fiber = engine.createFiber(*main_fn);
+            engine.execute();
+        }
+    } else {
+        std::cerr << "Compilation failed" << std::endl;
+        return 1;
+    }
+    
+    return 0;
+}
+```
+
+Output:
+```
+[DEBUG] Starting computation...
+[DEBUG] Distance: 5.0
+[DEBUG] Random value: 42
+```
+
+## Best Practices
+
+<Tip>
+1. **Type Safety**: Always validate function signatures match C++ function types
+2. **Error Handling**: Use return codes or special values to signal errors
+3. **String Safety**: Use `Engine::viewString()` for all string conversions
+4. **Memory Management**: Let Boehm GC handle allocations when possible
+5. **Module Organization**: Group related functions into logical modules
+6. **Documentation**: Document your C++ API for Yoyo script authors
+7. **Const Correctness**: Use `&str` (string reference) when you only need to read
+</Tip>
+
+## Performance Tips
+
+<Note>
+- Minimize string allocations by using `&str` parameters
+- Batch operations in C++ rather than making many small calls from Yoyo
+- Use primitive types when possible (faster than complex structures)
+- Consider caching function lookups instead of repeated `findFunction` calls
+- Profile to identify hot paths between C++ and Yoyo
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Function registration returns ParameterCountMismatch">
+    The number of C++ parameters doesn't match the Yoyo signature. Remember:
+    - Return values that "should sret" (large structs) count as an extra parameter
+    - Void return type should have `R = void`
+  </Accordion>
+
+  <Accordion title="Crashes when accessing strings">
+    - Always use `Engine::viewString()` to access Yoyo strings
+    - Never cast `void*` to `char*` directly
+    - Ensure string parameters are passed as `void*`, not `const char*`
+  </Accordion>
+
+  <Accordion title="Can't find function from C++">
+    - Function names must include the module hash prefix
+    - Use `mod->module_hash + "function_name"`
+    - Ensure functions are marked `@[public]` in Yoyo if needed
+  </Accordion>
+</AccordionGroup>

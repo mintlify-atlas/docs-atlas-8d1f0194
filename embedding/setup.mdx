@@ -1,0 +1,284 @@
+---
+title: 'Setup & Integration'
+description: 'Learn how to integrate Yoyo into your C++20 application'
+---
+
+## Overview
+
+Yoyo is a JIT-compiled, memory-safe scripting language designed to be embedded in C++20 applications. This guide covers the initial setup and integration steps.
+
+## Prerequisites
+
+Before integrating Yoyo, ensure your project meets these requirements:
+
+- **C++20 Compiler**: GCC 10+, Clang 12+, or MSVC 2019+
+- **Build System**: Meson (recommended) or CMake
+- **Dependencies**:
+  - Boehm-Demers-Weiser Garbage Collector (bdw-gc)
+  - LLVM (if using LLVM backend)
+  - libffi (if using YVM backend)
+
+## Installation
+
+<Steps>
+  <Step title="Clone the Repository">
+    First, clone the Yoyo repository into your project:
+
+    ```bash
+    git clone https://github.com/your-org/yoyo-lang.git
+    cd yoyo-lang
+    ```
+  </Step>
+
+  <Step title="Configure Build Options">
+    Yoyo supports multiple execution backends and library types. Choose your configuration:
+
+    <CodeGroup>
+      ```bash LLVM Backend (Static)
+      meson setup build \
+        -Dexecutor=llvm \
+        -Ddefault_library=static \
+        -Dllvm_static=true
+      ```
+
+      ```bash YVM Backend (Shared)
+      meson setup build \
+        -Dexecutor=yvm \
+        -Ddefault_library=shared
+      ```
+
+      ```bash Both Backends
+      meson setup build \
+        -Dexecutor=both \
+        -Ddefault_library=static
+      ```
+    </CodeGroup>
+
+    ### Build Options
+
+    | Option | Values | Description |
+    |--------|--------|-------------|
+    | `executor` | `llvm`, `yvm`, `both` | Choose the execution backend |
+    | `default_library` | `static`, `shared` | Library linking type |
+    | `llvm_static` | `true`, `false` | Link LLVM statically (LLVM backend only) |
+  </Step>
+
+  <Step title="Build the Library">
+    Compile Yoyo with your chosen configuration:
+
+    ```bash
+    meson compile -C build
+    ```
+  </Step>
+
+  <Step title="Install (Optional)">
+    Install Yoyo system-wide or to a custom prefix:
+
+    ```bash
+    # System-wide installation
+    meson install -C build
+
+    # Custom installation prefix
+    meson setup build --prefix=/path/to/install
+    meson install -C build
+    ```
+  </Step>
+</Steps>
+
+## Linking to Your Project
+
+### Using Meson (Recommended)
+
+If your project uses Meson, integrate Yoyo as a subproject:
+
+```python meson.build
+project('my-app', 'cpp', default_options: ['cpp_std=c++20'])
+
+# Add Yoyo as a subproject
+yoyo = subproject('yoyo-lang', default_options: [
+  'executor=llvm',
+  'default_library=static'
+])
+
+yoyo_dep = yoyo.get_variable('yoyo_dep')
+
+# Link your executable
+executable('my-app',
+  'src/main.cpp',
+  dependencies: [yoyo_dep]
+)
+```
+
+### Using CMake
+
+For CMake projects, use `find_package` or add Yoyo as a subdirectory:
+
+```cmake CMakeLists.txt
+cmake_minimum_required(VERSION 3.20)
+project(my-app CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Option 1: Find installed Yoyo
+find_package(Yoyo REQUIRED)
+
+# Option 2: Add as subdirectory
+# add_subdirectory(yoyo-lang)
+
+add_executable(my-app src/main.cpp)
+target_link_libraries(my-app PRIVATE Yoyo::yoyo)
+```
+
+### Manual Linking
+
+For other build systems, link against the Yoyo library and its dependencies:
+
+<CodeGroup>
+  ```bash Static Library
+  g++ -std=c++20 \
+    -I/path/to/yoyo/include/yoyo \
+    -L/path/to/yoyo/build \
+    src/main.cpp \
+    -lyoyo -lgc -lLLVM \
+    -o my-app
+  ```
+
+  ```bash Shared Library (Linux)
+  g++ -std=c++20 \
+    -I/path/to/yoyo/include/yoyo \
+    -L/path/to/yoyo/build \
+    src/main.cpp \
+    -lyoyo \
+    -Wl,-rpath,/path/to/yoyo/build \
+    -o my-app
+  ```
+
+  ```bash Shared Library (Windows)
+  cl /std:c++20 /EHsc \
+    /I"C:\path\to\yoyo\include\yoyo" \
+    src\main.cpp \
+    /link "C:\path\to\yoyo\build\yoyo.lib"
+  ```
+</CodeGroup>
+
+## Platform-Specific Considerations
+
+### Windows
+
+<Note>
+When using Yoyo as a shared library (DLL) on Windows, ensure `YOYO_SHARED` is defined in your project:
+
+```cpp
+#define YOYO_SHARED
+#include <engine.h>
+```
+
+This is automatically handled by the Meson dependency declaration.
+</Note>
+
+The `YOYO_API` macro in `common.h` handles DLL import/export:
+
+```cpp include/yoyo/common.h
+#ifdef _MSC_VER
+  #ifdef YOYO_SHARED
+    #ifdef YOYO_DLL
+      #define YOYO_API __declspec(dllexport)
+    #else
+      #define YOYO_API __declspec(dllimport)
+    #endif
+  #else
+    #define YOYO_API
+  #endif
+#else
+  #define YOYO_API
+#endif
+```
+
+### Linux/Unix
+
+Ensure the garbage collector library is available:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install libgc-dev
+
+# Fedora/RHEL
+sudo dnf install gc-devel
+
+# Arch Linux
+sudo pacman -S gc
+```
+
+### macOS
+
+Install dependencies via Homebrew:
+
+```bash
+brew install bdw-gc llvm
+```
+
+## Verifying Installation
+
+Create a minimal test program to verify the integration:
+
+```cpp main.cpp
+#include <iostream>
+#include <yvm/yvm_engine.h>  // or llvm/llvm_engine.h
+
+int main() {
+    Yoyo::YVMEngine engine;  // or Yoyo::LLVMEngine
+    std::cout << "Yoyo engine initialized successfully!" << std::endl;
+    return 0;
+}
+```
+
+Compile and run:
+
+```bash
+g++ -std=c++20 -I/path/to/yoyo/include/yoyo main.cpp -lyoyo -lgc -o test
+./test
+```
+
+Expected output:
+```
+Yoyo engine initialized successfully!
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Engine Basics" icon="engine" href="/embedding/engine">
+    Learn how to create and configure the Yoyo engine
+  </Card>
+  <Card title="Loading Modules" icon="cube" href="/embedding/modules">
+    Discover how to load and manage Yoyo modules
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Linker errors about undefined references">
+    Ensure all dependencies are linked:
+    - LLVM backend: `-lLLVM` or specific LLVM component libraries
+    - YVM backend: `-lffi`
+    - Both: `-lgc` (Boehm GC)
+  </Accordion>
+
+  <Accordion title="C++20 feature not supported">
+    Verify your compiler version:
+    ```bash
+    g++ --version    # Should be 10.0 or higher
+    clang++ --version # Should be 12.0 or higher
+    ```
+  </Accordion>
+
+  <Accordion title="Meson can't find LLVM">
+    Set the `LLVM_DIR` environment variable:
+    ```bash
+    export LLVM_DIR=/usr/lib/llvm-14/lib/cmake/llvm
+    meson setup build
+    ```
+  </Accordion>
+</AccordionGroup>

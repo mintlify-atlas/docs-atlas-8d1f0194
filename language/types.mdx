@@ -1,0 +1,364 @@
+---
+title: Type System
+description: Explore Yoyo's rich type system including primitives, structs, enums, unions, and optionals
+---
+
+Yoyo features a robust static type system with memory safety guarantees. The type system includes primitive types, user-defined types, generics, and special-purpose types like optionals and tuples.
+
+## Primitive Types
+
+### Integer Types
+
+Yoyo provides both signed and unsigned integer types:
+
+<CodeGroup>
+```yoyo Signed Integers
+i8    // 8-bit signed integer
+i16   // 16-bit signed integer
+i32   // 32-bit signed integer (default)
+i64   // 64-bit signed integer
+```
+
+```yoyo Unsigned Integers
+u8    // 8-bit unsigned integer
+u16   // 16-bit unsigned integer
+u32   // 32-bit unsigned integer
+u64   // 64-bit unsigned integer
+usize // Platform-dependent size
+```
+</CodeGroup>
+
+### Floating Point Types
+
+```yoyo
+f32   // 32-bit floating point
+f64   // 64-bit floating point (double precision)
+```
+
+### Other Primitives
+
+```yoyo
+bool  // Boolean type (true/false)
+char  // Character type
+void  // Void type (no value)
+str   // String type
+ptr   // Opaque pointer type
+```
+
+## Structs
+
+Structs are product types that group related data:
+
+```yoyo
+Vector2: struct = {
+    x: u32, 
+    y: u32
+}
+
+Game: struct = {
+    data: [Player; 9],
+    player: Player,
+    
+    render: fn (&this) = {
+        // Member function
+    }
+    
+    new: fn -> Game = {
+        return Game{ 
+            .data = [...],
+            .player = Player::X
+        };
+    }
+}
+```
+
+<Note>
+Structs can contain both data fields and member functions. Member functions are scoped to the struct.
+</Note>
+
+### Generic Structs
+
+Structs can be generic over one or more type parameters:
+
+```yoyo
+Node: struct::<T> = {
+    data: T,
+    next: (^Node::<T>)?
+}
+
+LinkedList: struct::<T> = {
+    first: (^Node::<T>)?,
+    
+    new: fn -> This = return This{ .first = null };
+    
+    append: fn (&mut this, value: T) = {
+        // Implementation
+    }
+}
+```
+
+The `This` keyword refers to the current type being defined.
+
+## Enums
+
+Enums are sum types representing a value from a fixed set of named variants:
+
+```yoyo
+Player: enum = { X, O, None }
+
+main: fn = {
+    current: Player = Player::X;
+    
+    if (current == Player::X) {
+        // Handle X
+    }
+}
+```
+
+Enums can have explicit integer values:
+
+```yoyo
+Status: enum = {
+    Idle = 0,
+    Running = 1,
+    Paused = 2
+}
+```
+
+### Enum Methods
+
+Enums can have associated functions:
+
+```yoyo
+Player: enum = { X, O, None }
+
+cycle: fn (p: Player) -> Player = {
+    if (p == Player::X) 
+        return Player::O;
+    else if (p == Player::O)
+        return Player::X;
+    return p;
+}
+
+// Usage
+next_player := current.cycle();
+```
+
+## Unions
+
+Unions are tagged unions (also called sum types or discriminated unions) where each variant can carry different data:
+
+```yoyo
+Message: union = {
+    Quit: void,
+    Start,  // implicit: void
+    Move: i32 & i32,
+    Write: str,
+    ChangeColor: i32 & i32 & i32
+    
+    // Member functions allowed
+    broadcast: fn (this, b: Broadcaster) -> void! = 
+        return b.perform_broadcast(this);
+}
+```
+
+### Pattern Matching on Unions
+
+Unions support runtime type checking and extraction:
+
+```yoyo
+main: fn = {
+    msg: mut Message = Message::Quit;
+    
+    // Extract data if variant matches
+    if |move_data| (msg as Message::Move) {
+        // move_data contains the i32 & i32 payload
+    }
+    
+    // Check variant type
+    if (msg is Message::Quit) {
+        // Handle quit
+    }
+}
+```
+
+<Note>
+Named members in union variants (like `{x: i32, y: i32}`) are not yet supported - use tuple-style `i32 & i32` instead.
+</Note>
+
+## Optional Types
+
+Optional types represent values that may or may not be present:
+
+```yoyo
+Composite: struct = {
+    value1: i32,
+    value2: f32
+}
+
+main: fn = {
+    opt: mut Composite? = null;  // Optional initialized to null
+    
+    // Null propagation operator
+    the_val := opt?.value1;  // the_val is i32?
+    
+    // Pattern matching to unwrap
+    if |val| (opt) {
+        // val is the unwrapped Composite
+    }
+    
+    // is operator for null checking
+    if (opt !is null) {
+        // opt is guaranteed to have a value
+    }
+}
+```
+
+### Optional References
+
+References can be optional:
+
+```yoyo
+access_array_no_panic: fn (arr: &mut [i32], idx: usize) -> (&mut i32)? = {
+    if (idx >= arr.size()) 
+        return null;
+    return &mut arr[idx];
+}
+```
+
+## Tuples
+
+Tuples group multiple values of different types:
+
+```yoyo
+EnumerateIter: struct::<T, O> impl core::Iterator::<(u64, O)> = {
+    impl core::Iterator::<(u64, O)> {
+        next: fn (&mut this) -> (u64, O)? = {
+            if |nxt| (this.actual_iter.next()) {
+                return (this.idx, nxt);  // Tuple literal
+            }
+            return null;
+        }
+    }
+}
+
+// Access tuple elements
+for (lol in iter.enumerate()) {
+    app::func(&"${lol.0}: ${*lol.1}");  // .0 and .1 access
+}
+```
+
+## Arrays
+
+### Static Arrays
+
+Fixed-size arrays with compile-time known size:
+
+```yoyo
+data: [Player; 9]  // Array of 9 Players
+
+// Initialization
+data = [
+    Player::None, Player::None, Player::None,
+    Player::None, Player::None, Player::None,
+    Player::None, Player::None, Player::None
+];
+
+// Access
+first := *data[0];
+```
+
+### Dynamic Arrays
+
+```yoyo
+arr: mut [i32] = [10, 20, 30];
+```
+
+## Reference Types
+
+Yoyo has several reference types for non-owning access:
+
+<Accordion title="Reference Type Overview">
+  <AccordionItem title="Immutable References: &T">
+    ```yoyo
+    process: fn (data: &str) = {
+        // Read-only access to str
+    }
+    ```
+  </AccordionItem>
+  
+  <AccordionItem title="Mutable References: &mut T">
+    ```yoyo
+    modify: fn (data: &mut i32) = {
+        *data = 42;
+    }
+    ```
+  </AccordionItem>
+  
+  <AccordionItem title="GC References: ^T">
+    ```yoyo
+    Node: struct::<T> = {
+        data: T,
+        next: (^Node::<T>)?  // GC-managed pointer
+    }
+    
+    // Allocate with gcnew
+    node := gcnew Node::<i32>{.data = 10, .next = null};
+    ```
+  </AccordionItem>
+</Accordion>
+
+## Type Aliases
+
+Create named aliases for complex types:
+
+```yoyo
+ElementTy: alias = &T;
+Callback: alias = fn (i32) -> bool;
+```
+
+## Type Inference
+
+Yoyo supports type inference using `:=`:
+
+```yoyo
+value := 42;           // Inferred as i32
+list := List::<i32>::from_array([1, 2, 3]);
+result := access_array_no_panic(arr, 1);
+```
+
+## Special Types
+
+<CardGroup cols={2}>
+  <Card title="Result Types" icon="check">
+    Result types represent operations that may fail:
+    ```yoyo
+    __res<T, E>  // Success or error
+    ```
+  </Card>
+  
+  <Card title="Variant Types" icon="code-branch">
+    Internal variant type for merging incompatible types:
+    ```yoyo
+    __var<T1, T2, ...>
+    ```
+  </Card>
+  
+  <Card title="Function Types" icon="function">
+    Function type representation:
+    ```yoyo
+    __fn  // Internal function type
+    ```
+  </Card>
+  
+  <Card title="Lambda Types" icon="lambda">
+    Anonymous function types:
+    ```yoyo
+    __lambda<...>  // Generated lambda type
+    ```
+  </Card>
+</CardGroup>
+
+<Warning>
+Yoyo is a research language in active development. Type system features may evolve.
+</Warning>

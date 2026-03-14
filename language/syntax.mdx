@@ -1,0 +1,232 @@
+---
+title: 'Syntax Basics'
+description: 'Learn the fundamental syntax rules and declaration patterns in Yoyo'
+---
+
+Yoyo's syntax is heavily inspired by [cpp2/cppfront](https://github.com/hsutter/cppfront) with minor variations. The language follows a consistent and predictable declaration pattern that applies across all language constructs.
+
+## Universal Declaration Syntax
+
+All declarations in Yoyo follow the same form:
+
+```yoyo
+name: kind = value
+```
+
+This uniform syntax applies to variables, functions, types, and more.
+
+<Note>
+The `kind` can be omitted in variable declarations when the type can be inferred from the initializer.
+</Note>
+
+## Variable Declarations
+
+### Immutable Variables
+
+By default, variables are immutable:
+
+```yoyo
+player: Player = Player::X
+name: str = "Alice"
+count := 42  // Type inferred as i32
+```
+
+### Mutable Variables
+
+Use the `mut` keyword to declare mutable variables:
+
+```yoyo
+idx: mut u32 = 10
+game: mut = Game::new()  // Type inferred
+a: mut = LinkedList::<str>::new()
+```
+
+## Function Syntax
+
+### Basic Functions
+
+Functions use the `fn` keyword with parameter types and return type:
+
+```yoyo
+cycle: fn (p: Player) -> Player = {
+    if (p == Player::X) 
+        return Player::O;
+    else if (p == Player::O)
+        return Player::X;
+    return p;
+}
+```
+
+### Implicit Return Blocks
+
+Single-statement functions can omit the braces:
+
+```yoyo
+new: fn -> Game = return Game{ 
+    .data = [Player::None, Player::None, Player::None],
+    .player = Player::X
+};
+```
+
+### Member Functions
+
+Member functions can take `this` by reference:
+
+```yoyo
+render: fn (&this) = {
+    row1 := "...";
+    row1.test::print();
+}
+
+append: fn (&mut this, value: T) = {
+    // Modify this
+}
+```
+
+## Struct Literals
+
+Structs are initialized using designated initializer syntax with `.field` notation:
+
+```yoyo
+Vector2: struct = {
+    x: u32, 
+    y: u32
+}
+
+a: mut = Vector2{.x = 90, .y = 20};
+```
+
+## Comments
+
+Yoyo supports two comment styles:
+
+```yoyo
+// Line comment
+
+/* 
+   Block comment
+   spanning multiple lines
+*/
+
+/// Documentation comment (planned)
+```
+
+## String Interpolation
+
+Yoyo uses `${}` for string interpolation:
+
+```yoyo
+player_text: fn (p: &[Player; 9], alt: i32) -> str = {
+    if (*(*p)[alt] == Player::X) 
+        return "X";
+    return "${alt}";  // Interpolate alt value
+}
+
+row1 := " ${player_text(&this.data, 0)} │ ${player_text(&this.data, 1)} ";
+```
+
+<Note>
+An alternative syntax `$"text {expr}"` is being considered for the future.
+</Note>
+
+## Control Flow
+
+### If Statements
+
+```yoyo
+if (condition) {
+    // then branch
+} else if (other_condition) {
+    // else if branch  
+} else {
+    // else branch
+}
+```
+
+### While Loops
+
+```yoyo
+should_loop: mut = true;
+while (should_loop) {
+    if |nxt| (last.next) 
+        last = nxt;
+    else 
+        should_loop = false;
+}
+```
+
+### For Loops
+
+For loops iterate over iterables:
+
+```yoyo
+for (elem in list.iter()) {
+    std::println("${*elem}");
+}
+
+for (lol in a.iter().chain(b.iter()).enumerate()) {
+    app::func(&"${lol.0}: ${*lol.1}");
+}
+```
+
+### Break and Continue
+
+```yoyo
+while (true) {
+    game.play();
+    if |winner| (game.check_winner()) {
+        if (winner != Player::None) {
+            "${winner} won".test::print();
+            break;
+        }
+    }
+}
+```
+
+## Pattern Matching with If-Let
+
+Yoyo uses `if |binding| (optional)` syntax for optional unwrapping:
+
+```yoyo
+if |val| (this.first) {
+    // val is bound to the unwrapped value
+    last: mut = val;
+}
+
+if |winner| (game.check_winner()) {
+    // winner contains the value if check_winner returned Some
+    "${winner} won".test::print();
+}
+```
+
+## Semicolons
+
+Semicolons are generally required to terminate statements, though they can be omitted in certain contexts where the statement boundary is unambiguous.
+
+## Module Access
+
+Use `::` for namespace/module access:
+
+```yoyo
+app: module = APP
+
+main: fn = {
+    app::func(&"Hello");
+}
+
+Player::X
+LinkedList::<str>::new()
+```
+
+## Attributes
+
+Attributes can be applied to declarations (syntax being refined):
+
+```yoyo
+#[public]
+func: fn = { }
+```
+
+<Warning>
+Many syntax features are still evolving as Yoyo is a research language in active development.
+</Warning>

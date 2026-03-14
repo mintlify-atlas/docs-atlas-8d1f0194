@@ -1,0 +1,447 @@
+---
+title: 'Type'
+description: 'Core type representation and manipulation for Yoyo language'
+icon: 'brackets-curly'
+---
+
+## Overview
+
+The `Type` struct is the fundamental representation of types in the Yoyo language. It supports a rich type system including primitives, generics, references, functions, classes, enums, unions, and complex compound types like tuples, arrays, and variants.
+
+## Type Structure
+
+```cpp
+namespace Yoyo {
+    struct YOYO_API Type {
+        std::string name;
+        std::vector<Type> subtypes;
+        std::shared_ptr<FunctionSignature> signature;
+        ModuleBase* module;
+        mutable bool is_mutable = false;
+        bool is_lvalue = false;
+        std::string block_hash;
+        
+        bool operator==(const Type& other) const;
+        auto operator<=>(const Type& other) const;
+    };
+}
+```
+
+<ParamField path="name" type="std::string" required>
+  The name of the type. For primitives this is the type name (e.g., `"i32"`, `"f64"`, `"str"`). For special types, names are prefixed with `__` (e.g., `"__fn"` for functions, `"__tup"` for tuples, `"__ref_mut"` for mutable references).
+</ParamField>
+
+<ParamField path="subtypes" type="std::vector<Type>">
+  Generic type parameters or compound type elements. For example:
+  - Tuple `(i32, str)` has two subtypes: `i32` and `str`
+  - Generic type `Vec<i32>` has one subtype: `i32`
+  - Function types store parameter and return types here
+</ParamField>
+
+<ParamField path="signature" type="std::shared_ptr<FunctionSignature>">
+  Function signature for callable types (`__fn`) and storable function pointers. Shared pointer for copyability; usually `nullptr` for non-callable types.
+</ParamField>
+
+<ParamField path="module" type="ModuleBase*">
+  The module where this type is defined. Used for resolving types across module boundaries.
+</ParamField>
+
+<ParamField path="is_mutable" type="bool" default="false">
+  Indicates whether this type instance is mutable. Marked `mutable` for semantic flexibility.
+</ParamField>
+
+<ParamField path="is_lvalue" type="bool" default="false">
+  Indicates whether this type represents an lvalue (addressable location in memory).
+</ParamField>
+
+<ParamField path="block_hash" type="std::string">
+  Hash identifying the scope block for disambiguation, particularly for generic instantiations.
+</ParamField>
+
+## Type Comparison
+
+### Equality Checking
+
+```cpp
+bool is_equal(const Type& other) const;
+bool is_shallow_equal(const Type& other) const;
+bool operator==(const Type& other) const;  // Calls is_equal()
+```
+
+<ResponseField name="is_equal" type="bool">
+  Performs deep equality check including name, subtypes, module, and signature.
+</ResponseField>
+
+<ResponseField name="is_shallow_equal" type="bool">
+  Compares only the type name, ignoring generics and other metadata.
+</ResponseField>
+
+### Type Compatibility
+
+```cpp
+size_t conversion_friction(const Type& other, IRGenerator*) const;
+bool is_assignable_from(const Type& other, IRGenerator* irgen) const;
+bool can_accept_as_arg(const Type& other, IRGenerator*) const;
+```
+
+<ResponseField name="conversion_friction" type="size_t">
+  Returns a numeric score indicating how much "friction" exists in converting from this type to another. Lower values indicate easier conversions. Used for overload resolution.
+</ResponseField>
+
+<ResponseField name="is_assignable_from" type="bool">
+  Checks if a value of type `other` can be assigned to a variable of this type, considering mutability and ownership semantics.
+</ResponseField>
+
+<ResponseField name="can_accept_as_arg" type="bool">
+  Checks if a value of type `other` can be passed as an argument where this type is expected.
+</ResponseField>
+
+## Type Predicates
+
+### Primitive Type Checks
+
+```cpp
+bool is_integral() const;
+bool is_signed_integral() const;
+bool is_unsigned_integral() const;
+bool is_floating_point() const;
+bool is_boolean() const;
+bool is_primitive() const;  // integral || floating || boolean || void
+bool is_void() const;
+```
+
+<Accordion title="Integer Types">
+  ```cpp
+  // Signed: i8, i16, i32, i64
+  // Unsigned: u8, u16, u32, u64
+  std::optional<uint32_t> integer_width() const;  // Returns 8, 16, 32, or 64
+  ```
+</Accordion>
+
+<Accordion title="Floating Point Types">
+  ```cpp
+  // f32, f64
+  std::optional<uint32_t> float_width() const;  // Returns 32 or 64
+  ```
+</Accordion>
+
+### Compound Type Checks
+
+```cpp
+bool is_tuple() const;          // __tup
+bool is_optional() const;       // __opt
+bool is_result() const;         // __res
+bool is_variant() const;        // __var
+bool is_str() const;
+bool is_char() const;
+bool is_function() const;       // __fn
+bool is_lambda() const;         // __lambda*
+```
+
+### Reference Type Checks
+
+```cpp
+bool is_reference() const;
+bool is_mutable_reference() const;  // __ref_mut
+bool is_gc_reference() const;
+bool is_view() const;
+bool is_mut_view() const;
+bool is_gc_view() const;
+```
+
+### Array and Collection Types
+
+```cpp
+bool is_static_array() const;
+bool is_dynamic_array() const;
+bool is_array() const;           // static || dynamic
+bool is_slice() const;
+bool is_mut_slice() const;
+
+uint32_t static_array_size() const;  // For static arrays only
+```
+
+### Memory and Ownership
+
+```cpp
+bool is_non_owning(IRGenerator* irgen) const;
+bool is_non_owning_mut(IRGenerator* irgen) const;
+bool is_trivially_destructible(IRGenerator* irgen, bool consider_no = true) const;
+bool can_be_stored() const;
+bool is_opaque_pointer() const;  // ptr type
+```
+
+### Advanced Type Checks
+
+```cpp
+bool is_builtin() const;
+bool is_conversion_result() const;
+bool is_value_conversion_result() const;
+bool is_ref_conversion_result() const;
+bool is_error_ty() const;
+bool is_interface_function() const;
+bool should_sret() const;  // Should return via struct-return
+```
+
+## Type Transformations
+
+### Reference Manipulation
+
+```cpp
+Type strip_lvalue() const;
+const Type& deref() const;  // Dereference if reference, else return self
+Type reference_to() const;
+Type mutable_reference_to() const;
+Type gc_reference_to() const;
+```
+
+<CodeGroup>
+```cpp Example: Creating References
+Type i32_type{"i32"};
+Type ref = i32_type.reference_to();         // &i32
+Type mut_ref = i32_type.mutable_reference_to();  // &mut i32
+Type gc_ref = i32_type.gc_reference_to();   // GC reference
+```
+</CodeGroup>
+
+### Mutability and Value Category
+
+```cpp
+Type make_mut() const;
+Type make_lvalue() const;
+Type take_mutability_characteristics(const Type&) const;
+```
+
+### Type Resolution
+
+```cpp
+Type saturated(ModuleBase* src, IRGenerator* irgen) const;
+void saturate(ModuleBase* src, IRGenerator* irgen, bool do_verify = true);
+Type desaturate();
+bool verify() const;
+```
+
+<Note>
+  **Saturation** resolves type aliases and fully qualifies types with module information. This is essential for cross-module type checking.
+</Note>
+
+## Variant Types
+
+```cpp
+static Type variant_merge(Type a, Type b);
+Type extracts_to() const;
+```
+
+<ResponseField name="variant_merge" type="static Type">
+  Merges two types into a variant type. If `a` is already a variant, adds `b` to its subtypes. If types are equal, returns one of them.
+  
+  ```cpp
+  Type int_type{"i32"};
+  Type str_type{"str"};
+  Type variant = Type::variant_merge(int_type, str_type);  // __var<i32, str>
+  ```
+</ResponseField>
+
+<ResponseField name="extracts_to" type="Type">
+  Returns the type that this type extracts to in conditional extraction expressions.
+</ResponseField>
+
+## Declaration Accessors
+
+```cpp
+ClassDeclaration* get_decl_if_class(IRGenerator* irgen) const;
+EnumDeclaration* get_decl_if_enum() const;
+UnionDeclaration* get_decl_if_union() const;
+```
+
+These methods return the corresponding declaration if the type represents a class, enum, or union; otherwise return `nullptr`.
+
+## Size and Layout
+
+```cpp
+size_t bitsize(IRGenerator* irgen) const;
+```
+
+Returns the size of the type in bits. Requires `IRGenerator` for resolving complex type layouts.
+
+## Name Formatting
+
+```cpp
+std::string full_name() const;
+std::string full_name_no_block() const;
+std::string full_name_no_generics() const;
+std::string pretty_name(const std::string& block) const;
+```
+
+<ResponseField name="full_name" type="std::string">
+  Complete type name including generics, module qualification, and block hash.
+</ResponseField>
+
+<ResponseField name="full_name_no_block" type="std::string">
+  Full name without the block hash suffix.
+</ResponseField>
+
+<ResponseField name="full_name_no_generics" type="std::string">
+  Full name without generic parameters.
+</ResponseField>
+
+<ResponseField name="pretty_name" type="std::string">
+  Human-readable type name for diagnostics and error messages.
+</ResponseField>
+
+## UnsaturatedTypeIterator
+
+Helper class for iterating over unsaturated (unresolved) type components.
+
+```cpp
+struct UnsaturatedTypeIterator {
+    explicit UnsaturatedTypeIterator(const Type& type);
+    
+    bool is_end() const;
+    Type next();
+    Type last(bool parse = false);
+    uint32_t num_iters();
+    
+private:
+    const Type& type;
+    size_t pos = 0;
+    std::vector<std::string_view> split_cache;
+};
+```
+
+<ParamField path="type" type="const Type&">
+  The type to iterate over.
+</ParamField>
+
+<ParamField path="pos" type="size_t">
+  Current iteration position.
+</ParamField>
+
+<ParamField path="split_cache" type="std::vector<std::string_view>">
+  Cached split components for efficient iteration.
+</ParamField>
+
+## Function Signatures
+
+Types representing functions carry additional signature information:
+
+```cpp
+struct FunctionParameter {
+    Type type;
+    std::string name;
+};
+
+struct YOYO_API FunctionSignature {
+    Type returnType;
+    bool return_is_ref;
+    std::vector<FunctionParameter> parameters;
+    std::string pretty_name(const std::string& block_hash) const;
+};
+```
+
+<CodeGroup>
+```cpp Example: Function Type
+FunctionSignature sig;
+sig.returnType = Type{"i32"};
+sig.parameters = {
+    {Type{"i32"}, "x"},
+    {Type{"i32"}, "y"}
+};
+
+Type fn_type;
+fn_type.name = "__fn";
+fn_type.signature = std::make_shared<FunctionSignature>(sig);
+// Represents: fn(x: i32, y: i32) -> i32
+```
+</CodeGroup>
+
+## Usage Examples
+
+### Creating Basic Types
+
+```cpp
+// Primitive types
+Type i32_type{"i32"};
+Type f64_type{"f64"};
+Type bool_type{"bool"};
+Type str_type{"str"};
+
+// Check type properties
+if (i32_type.is_integral() && i32_type.is_signed_integral()) {
+    auto width = i32_type.integer_width();  // Returns 32
+}
+```
+
+### Working with Generic Types
+
+```cpp
+// Create Vec<i32>
+Type vec_i32;
+vec_i32.name = "Vec";
+vec_i32.subtypes = {Type{"i32"}};
+
+// Create Option<str>
+Type opt_str;
+opt_str.name = "__opt";
+opt_str.subtypes = {Type{"str"}};
+```
+
+### Type Checking and Conversion
+
+```cpp
+Type source{"i32"};
+Type dest{"i64"};
+
+// Check if conversion is possible
+if (dest.is_assignable_from(source, irgen)) {
+    // Calculate conversion cost
+    size_t friction = dest.conversion_friction(source, irgen);
+    // Lower friction = better match
+}
+```
+
+### Reference Types
+
+```cpp
+struct Point {
+    Type type{"Point"};
+};
+
+Point p;
+Type point_ref = p.type.reference_to();      // &Point
+Type point_mut = p.type.mutable_reference_to(); // &mut Point
+
+// Dereference back
+const Type& original = point_ref.deref();  // Point
+```
+
+### Tuple Types
+
+```cpp
+// Create (i32, str, bool)
+Type tuple;
+tuple.name = "__tup";
+tuple.subtypes = {
+    Type{"i32"},
+    Type{"str"},
+    Type{"bool"}
+};
+
+if (tuple.is_tuple()) {
+    // Access elements via subtypes
+    for (const auto& element : tuple.subtypes) {
+        // Process each tuple element type
+    }
+}
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Type Checker" icon="check" href="/api/type-checker">
+    Learn about type checking and constraint solving
+  </Card>
+  <Card title="Expressions" icon="code" href="/api/expressions">
+    Expression types and their evaluation
+  </Card>
+</CardGroup>
