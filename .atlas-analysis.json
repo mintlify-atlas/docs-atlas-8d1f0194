@@ -1,0 +1,110 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Yoyo",
+  "projectDescription": "Embeddable JIT-compiled memory safe scripting language for C++20",
+  "theme": "aspen",
+  "primaryColor": "#7B61FF",
+  "lightColor": "#9B81FF",
+  "darkColor": "#5B41DF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Language Guide",
+            "pages": [
+              "language/syntax",
+              "language/types",
+              "language/functions",
+              "language/memory-model",
+              "language/generics",
+              "language/operator-overloading",
+              "language/interfaces"
+            ]
+          },
+          {
+            "group": "Embedding Guide",
+            "pages": [
+              "embedding/setup",
+              "embedding/engine",
+              "embedding/modules",
+              "embedding/interop"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/borrow-checker",
+              "advanced/type-system",
+              "advanced/backends",
+              "advanced/compilation"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/engine",
+              "api/parser",
+              "api/module",
+              "api/runtime"
+            ]
+          },
+          {
+            "group": "Type System",
+            "pages": [
+              "api/types",
+              "api/type-checker",
+              "api/expressions"
+            ]
+          },
+          {
+            "group": "IR & Code Generation",
+            "pages": [
+              "api/ir-generator",
+              "api/llvm-backend",
+              "api/yvm-backend"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "JIT compilation with LLVM and YVM backends",
+    "Memory safety through borrow checking",
+    "Static typing with type inference",
+    "Generic programming support",
+    "Operator overloading",
+    "Interface/trait system",
+    "Pattern matching with conditional extraction",
+    "Embeddable in C++20 applications"
+  ],
+  "publicApiSurface": [
+    "Engine::execute()",
+    "Engine::createGlobalConstant()",
+    "Parser::parseProgram()",
+    "Parser::parseExpression()",
+    "Parser::parseStatement()",
+    "Scanner::NextToken()",
+    "IRGenerator",
+    "TypeChecker",
+    "BorrowChecker",
+    "ModuleBase",
+    "LLVMEngine",
+    "YVMEngine"
+  ]
+}
